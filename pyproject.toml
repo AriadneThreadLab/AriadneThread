@@ -1,0 +1,79 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "osm-geoagent"
+version = "0.1.0"
+description = "Knowledge-grounded planner-executor GeoAgent that turns natural-language GIS requests into controlled OpenStreetMap operations."
+readme = "README.md"
+requires-python = ">=3.10,<3.11"
+license = { text = "MIT" }
+
+dependencies = [
+    "fastapi>=0.115,<0.116",
+    "uvicorn[standard]>=0.30,<0.35",
+    "pydantic>=2.7,<3",
+    "pydantic-settings>=2.3,<3",
+    "sqlalchemy[asyncio]>=2.0.30,<2.1",
+    "asyncpg>=0.29,<0.31",
+    "alembic>=1.13,<2",
+    "pgvector>=0.3,<0.5",
+    "geoalchemy2>=0.15,<0.18",
+    "httpx>=0.27,<0.29",
+]
+
+[project.optional-dependencies]
+# Heavy ML stack. Deliberately optional so that unit tests and CI never pull
+# torch, and so the embedding model is only installed where it is actually run.
+embeddings = [
+    "sentence-transformers>=3.0,<4",
+]
+dev = [
+    "pytest>=8.2,<9",
+    "pytest-asyncio>=0.23,<0.25",
+    "ruff>=0.5,<0.13",
+    "mypy>=1.10,<2",
+]
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+filterwarnings = ["error::DeprecationWarning:app.*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+src = ["app", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "ANN", "RUF"]
+ignore = ["ANN401"]
+
+[tool.ruff.lint.per-file-ignores]
+# Test doubles and fixtures are readable without full annotations; application
+# code stays fully annotated.
+"tests/*" = ["ANN001", "ANN002", "ANN003", "ANN201", "ANN202", "ANN204"]
+"alembic/*" = ["ANN"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+warn_unused_configs = true
+plugins = ["pydantic.mypy"]
+exclude = ["^alembic/"]
+
+[[tool.mypy.overrides]]
+module = ["sentence_transformers.*", "pgvector.*"]
+ignore_missing_imports = true
+
+# Application code is strictly typed; test doubles may stay untyped.
+[[tool.mypy.overrides]]
+module = ["tests.*"]
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+disallow_untyped_calls = false
+warn_unused_ignores = false
