@@ -155,3 +155,29 @@ def test_non_positive_timeout_is_rejected():
     query = OsmFeatureQuery(place="Berlin", tags=[TagFilter(key="leisure", value="park")])
     with pytest.raises(OverpassQueryBuildError):
         build_overpass_query(query, timeout_seconds=0)
+
+
+def test_maximum_tag_count_is_eight():
+    tags = [TagFilter(key=f"key{i}", value="yes") for i in range(8)]
+    OsmFeatureQuery(place="Berlin", tags=tags)
+    with pytest.raises(ValidationError):
+        OsmFeatureQuery(
+            place="Berlin",
+            tags=[TagFilter(key=f"key{i}", value="yes") for i in range(9)],
+        )
+
+
+def test_result_limit_is_rendered_in_out_statement():
+    query = OsmFeatureQuery(
+        place="Berlin",
+        tags=[TagFilter(key="leisure", value="park")],
+        limit=25,
+    )
+    assert build_overpass_query(query, timeout_seconds=30).endswith("out geom 25;")
+
+
+def test_unsafe_tag_key_characters_are_rejected():
+    with pytest.raises(ValidationError):
+        TagFilter(key='leisure"][amenity')
+    with pytest.raises(ValidationError):
+        TagFilter(key="leisure;out")

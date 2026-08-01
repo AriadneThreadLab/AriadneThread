@@ -19,9 +19,10 @@ Orchestration**. See [docs/architecture.md](docs/architecture.md).
 
 ## Status
 
-Foundation through knowledge retrieval. The corpus can be ingested and indexed
-with BGE-M3 into pgvector, and `search_osm_knowledge` is registered. The
-Overpass HTTP client and the agent loop are next - see [Roadmap](#roadmap).
+Foundation through live OSM retrieval. Documentation search
+(`search_osm_knowledge`) and the Overpass tool (`query_osm`) are registered.
+The bounded agent loop and `/agent/query` endpoint are next - see
+[Roadmap](#roadmap).
 
 ## Requirements
 
@@ -118,10 +119,16 @@ Diagnostic retrieval (cosine similarity; higher score is better):
 `BGE_DEVICE` defaults to `cpu` so Ollama can keep the GPU. Set `BGE_DEVICE=cuda`
 only when you intentionally want embeddings on the GPU.
 
-Optional real-model integration test:
+Optional integration tests (real BGE-M3 + DB and/or a tiny live Overpass call):
 
 ```bash
 RUN_INTEGRATION=1 ./.venv/bin/pytest -m integration
+```
+
+Live Overpass only (still requires `RUN_INTEGRATION=1`):
+
+```bash
+RUN_INTEGRATION=1 ./.venv/bin/pytest -m integration tests/test_overpass_integration.py
 ```
 
 ## Roadmap
@@ -129,7 +136,7 @@ RUN_INTEGRATION=1 ./.venv/bin/pytest -m integration
 1. ~~`knowledge_documents` / `knowledge_chunks` models and the first migration~~
 2. ~~OSM wiki ingestion for the eight whitelisted pages, plus chunking~~
 3. ~~BGE-M3 indexing and pgvector similarity retrieval~~
-4. The Overpass HTTP client and the Overpass-to-GeoJSON encoder
+4. ~~The Overpass HTTP client, GeoJSON encoder, and registered `query_osm`~~
 5. The bounded agent loop and the `/agent/query` endpoint
 6. A map UI
 

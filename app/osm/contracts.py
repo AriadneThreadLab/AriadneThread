@@ -1,9 +1,4 @@
-"""Overpass transport contracts.
-
-The HTTP implementation is deliberately absent in this phase; only the shape of
-the boundary is fixed, so the tool layer and its tests can be written against a
-fake client.
-"""
+"""Overpass transport and GeoJSON conversion contracts."""
 
 from __future__ import annotations
 
@@ -13,8 +8,7 @@ from datetime import datetime
 from typing import Any, Protocol, runtime_checkable
 
 #: Overpass returns a JSON document with an ``elements`` array. Element shapes
-#: differ per type and per ``out`` mode, so they stay untyped until the GeoJSON
-#: converter is implemented.
+#: differ per type and per ``out`` mode.
 OverpassElement = dict[str, Any]
 
 #: A GeoJSON ``FeatureCollection`` object, ready to hand to a map client.
@@ -37,6 +31,14 @@ class OverpassResponse:
     warnings: tuple[str, ...] = field(default_factory=tuple)
 
 
+@dataclass(frozen=True, slots=True)
+class GeoJsonConversionResult:
+    """GeoJSON plus conversion warnings (never invents unsupported geometry)."""
+
+    feature_collection: GeoJsonFeatureCollection
+    warnings: tuple[str, ...] = ()
+
+
 @runtime_checkable
 class OverpassClient(Protocol):
     """Executes a pre-built Overpass QL query.
@@ -57,11 +59,6 @@ class OverpassClient(Protocol):
 
 @runtime_checkable
 class OsmGeoJsonEncoder(Protocol):
-    """Converts raw Overpass elements into a GeoJSON ``FeatureCollection``.
+    """Converts raw Overpass elements into a GeoJSON ``FeatureCollection``."""
 
-    Kept separate from the transport so the conversion rules (centre points,
-    ways, relation members, tag mapping) can be developed and tested on stored
-    fixtures without any network access.
-    """
-
-    def encode(self, elements: Sequence[OverpassElement]) -> GeoJsonFeatureCollection: ...
+    def encode(self, elements: Sequence[OverpassElement]) -> GeoJsonConversionResult: ...

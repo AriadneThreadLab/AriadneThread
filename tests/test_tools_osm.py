@@ -7,10 +7,16 @@ from datetime import datetime, timezone
 
 import pytest
 from app.core.errors import EmbeddingError, ToolExecutionError
-from app.osm.contracts import OSM_ATTRIBUTION, OverpassElement, OverpassResponse
+from app.osm.contracts import (
+    OSM_ATTRIBUTION,
+    GeoJsonConversionResult,
+    OverpassElement,
+    OverpassResponse,
+)
 from app.osm.query_spec import OsmFeatureQuery, PointRadius, TagFilter
 from app.rag.contracts import OSM_KNOWLEDGE_DOMAIN, RetrievedPassage
-from app.tools.query_osm import QueryOsmTool
+from app.tools.factory import build_tool_registry
+from app.tools.query_osm import TOOL_NAME, QueryOsmTool
 from app.tools.search_osm_knowledge import SearchOsmKnowledgeArgs, SearchOsmKnowledgeTool
 
 _PASSAGE = RetrievedPassage(
@@ -67,13 +73,16 @@ class FakeOverpassClient:
 
 
 class FakeEncoder:
-    def encode(self, elements: Sequence[OverpassElement]) -> dict[str, object]:
-        return {
-            "type": "FeatureCollection",
-            "features": [
-                {"type": "Feature", "properties": element, "geometry": None} for element in elements
-            ],
-        }
+    def encode(self, elements: Sequence[OverpassElement]) -> GeoJsonConversionResult:
+        return GeoJsonConversionResult(
+            feature_collection={
+                "type": "FeatureCollection",
+                "features": [
+                    {"type": "Feature", "properties": element, "geometry": None}
+                    for element in elements
+                ],
+            }
+        )
 
 
 # --- search_osm_knowledge ---
@@ -174,3 +183,37 @@ def test_query_osm_arguments_are_the_validated_query_spec():
     schema = tool.args_model.model_json_schema()
     assert schema["additionalProperties"] is False
     assert "overpass_ql" not in schema["properties"]
+    assert "raw_query" not in schema["properties"]
+
+
+async def test_query_osm_observation_excludes_full_geojson():
+    client = FakeOverpassClient(
+        elements=(
+            {
+                "type": "node",
+                "id": 1,
+                "lat": 52.5,
+                "lon": 13.4,
+                "tags": {"amenity": "bench"},
+            },
+        ),
+    )
+    tool = _query_tool(client)
+    outcome = await tool.execute(
+        OsmFeatureQuery(place="Berlin", tags=[TagFilter(key="amenity", value="bench")])
+    )
+
+    assert outcome.payload.geojson["type"] == "FeatureCollection"
+    assert "FeatureCollection" not in outcome.observation
+    assert '"coordinates"' not in outcome.observation
+    assert "source=live_osm" in outcome.observation
+    assert "feature_count=1" in outcome.observation
+    assert "Do not invent" in outcome.observation
+
+
+def test_query_osm_is_registered_under_the_stable_name():
+    tool = _query_tool(FakeOverpassClient())
+    registry = build_tool_registry(query_osm_tool=tool)
+    assert TOOL_NAME == "query_osm"
+    assert registry.names == ("query_osm",)
+    assert registry.get("query_osm") is tool

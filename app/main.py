@@ -22,6 +22,7 @@ from app.core.errors import GeoAgentError
 from app.core.logging import configure_logging
 from app.db.session import Database, DatabaseConfig
 from app.embeddings.factory import build_bge_m3_provider
+from app.osm.factory import build_query_osm_tool
 from app.rag.retriever import SessionBoundKnowledgeRetriever
 from app.tools.factory import build_tool_registry
 
@@ -38,11 +39,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         database = Database(DatabaseConfig(url=resolved.database_url))
         embedder = build_bge_m3_provider(resolved)
         retriever = SessionBoundKnowledgeRetriever(database, embedder)
+        query_osm_tool = build_query_osm_tool(resolved)
         app.state.settings = resolved
         app.state.database = database
         app.state.embedding_provider = embedder
+        app.state.query_osm_tool = query_osm_tool
         app.state.tool_registry = build_tool_registry(
             knowledge_retriever=retriever,
+            query_osm_tool=query_osm_tool,
             rag_top_k=resolved.rag_top_k,
         )
         logger.info(
@@ -54,6 +58,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             yield
         finally:
+            await query_osm_tool.aclose()
             await embedder.aclose()
             await database.dispose()
             logger.info("OSM GeoAgent stopped")

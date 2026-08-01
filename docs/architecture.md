@@ -94,6 +94,24 @@ The supported subset is `[out:json]` + optional `area[name=...]` + node/way/
 relation statements with tag selectors and one spatial filter + `out geom|center
 <limit>`. Modelling more of Overpass is explicitly out of scope.
 
+The HTTP client (`app/osm/client.py`) posts that query to the configured
+`OVERPASS_BASE_URL` only. Connect/read timeouts, `OVERPASS_MAX_RESPONSE_BYTES`,
+HTTP 429/4xx/5xx, malformed JSON and Overpass error remarks are mapped to
+structured tool errors. Empty `elements` is a valid success.
+
+GeoJSON normalisation (`app/osm/geojson.py`) produces a
+`FeatureCollection`. Nodes become Points; ways use `geometry` (LineString or
+closed Polygon) or `center` (Point). Relations without reliable geometry are
+skipped with an explicit warning - geometry is never invented. Properties keep
+`osm_type`, `osm_id`, `tags` and OSM attribution.
+
+`query_osm` returns two layers of result:
+
+1. a compact observation for the model (status, feature count, source type,
+   warning count, query summary; never the full GeoJSON);
+2. a structured payload for the API/UI (GeoJSON, generated Overpass QL,
+   warnings, attribution).
+
 ## 4. Bounded tool loop
 
 1. Send the conversation and the tool definitions to the model.
@@ -185,7 +203,8 @@ Ingestion (`python -m app.cli ingest-osm-knowledge`) uses the MediaWiki API
 only, with a descriptive User-Agent, explicit timeouts and bounded retries.
 Articles are normalised from wikitext, split by headings, hashed, and upserted
 by `(domain, source_url)`. Changed documents replace all chunks so superseded
-passages are not left searchable. Embeddings are deferred to a later phase.
+passages are not left searchable. Embeddings are written by
+`python -m app.cli index-osm-knowledge`.
 
 ## 9. Module map
 
@@ -197,10 +216,10 @@ app/
   db/           declarative base, async engine and session lifecycle
   embeddings/   EmbeddingProvider protocol, lazy BGE-M3 provider
   llm/          provider-neutral chat contracts, Ollama provider, tool protocol
-  osm/          query spec, deterministic Overpass builder, transport contracts
+  osm/          query spec, builder, Overpass client, GeoJSON encoder
   rag/          retrieval contracts, whitelist, MediaWiki ingest, chunking
   tools/        Tool protocol, registry, search_osm_knowledge, query_osm
-  cli.py        maintenance commands (`ingest-osm-knowledge`)
+  cli.py        maintenance commands (`ingest-osm-knowledge`, indexing, search)
 ```
 
 Dependency direction is inward: `api` → `agent` → `tools` → (`rag`, `osm`) →

@@ -41,7 +41,12 @@ async def test_application_state_exposes_shared_resources(settings: Settings):
     app = create_app(settings)
     async with app.router.lifespan_context(app):
         assert app.state.settings is settings
-        assert app.state.tool_registry.names == ("search_osm_knowledge",)
+        # Registry.names is sorted alphabetically.
+        assert app.state.tool_registry.names == (
+            "query_osm",
+            "search_osm_knowledge",
+        )
+        assert app.state.query_osm_tool is not None
         assert app.state.database is not None
         assert app.state.embedding_provider is not None
         assert not app.state.embedding_provider.is_loaded
