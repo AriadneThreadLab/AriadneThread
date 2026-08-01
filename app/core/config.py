@@ -51,7 +51,8 @@ class Settings(BaseSettings):
 
     # --- Embeddings ---
     bge_model_name: str = "BAAI/bge-m3"
-    bge_device: str = "cuda"
+    # Prefer cpu when Ollama is already using the GPU; set to cuda when VRAM allows.
+    bge_device: str = "cpu"
     bge_batch_size: int = Field(default=8, ge=1, le=256)
 
     # --- Overpass ---

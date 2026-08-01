@@ -11,10 +11,12 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.core.errors import EmbeddingError, GeoAgentError, ToolExecutionError
 from app.rag.contracts import (
+    MAX_RAG_TOP_K,
     OSM_KNOWLEDGE_DOMAIN,
     KnowledgeRetriever,
     RetrievedPassage,
 )
+from app.rag.retriever import RetrievalError
 from app.tools.contracts import ToolOutcome
 
 TOOL_NAME = "search_osm_knowledge"
@@ -24,7 +26,7 @@ TOOL_DESCRIPTION = (
     "passages, NOT live map features. Use it to decide which OSM tags to query."
 )
 
-MAX_TOP_K = 20
+MAX_TOP_K = MAX_RAG_TOP_K
 _OBSERVATION_SNIPPET_CHARS = 240
 
 
@@ -104,6 +106,8 @@ class SearchOsmKnowledgeTool:
             )
         except EmbeddingError as exc:
             raise ToolExecutionError(f"knowledge search unavailable: {exc.message}") from exc
+        except RetrievalError as exc:
+            raise ToolExecutionError(f"knowledge search failed: {exc.message}") from exc
         except GeoAgentError as exc:
             raise ToolExecutionError(f"knowledge search failed: {exc.message}") from exc
         result = SearchOsmKnowledgeResult(query=args.query, passages=passages)

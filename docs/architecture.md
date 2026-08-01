@@ -139,8 +139,13 @@ no change to any tool or to the agent.
 **Embeddings.** `EmbeddingProvider` / `BgeM3EmbeddingProvider`
 (`BAAI/bge-m3`, 1024-dim, multilingual - this is what makes a Persian question
 retrieve English OSM documentation). The model is loaded lazily behind a lock
-on first use; importing the module pulls in neither torch nor the network, and
-`sentence-transformers` is an optional install extra.
+on first use from the local Hugging Face cache only (`local_files_only`);
+importing the module pulls in neither torch nor the network, and
+`sentence-transformers` is an optional install extra. Indexing is
+`python -m app.cli index-osm-knowledge`. Retrieval uses pgvector cosine
+distance converted to cosine *similarity* (`score = 1 - distance`; higher is
+better), always filtered to `osm_knowledge`, and is exposed as the registered
+tool `search_osm_knowledge`.
 
 ## 7. Persistence
 

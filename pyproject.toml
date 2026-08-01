@@ -43,6 +43,9 @@ include = ["app*"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 filterwarnings = ["error::DeprecationWarning:app.*"]
+markers = [
+    "integration: real model/database checks (enable with RUN_INTEGRATION=1)",
+]
 
 [tool.ruff]
 line-length = 100

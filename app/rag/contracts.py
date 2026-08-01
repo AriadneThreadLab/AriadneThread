@@ -16,6 +16,9 @@ from pydantic import BaseModel, ConfigDict, Field
 #: corpus can be extended later without mixing unrelated material.
 OSM_KNOWLEDGE_DOMAIN = "osm_knowledge"
 
+#: Hard upper bound for retrieval ``top_k`` (tool schema and retriever agree).
+MAX_RAG_TOP_K = 20
+
 
 class RetrievedPassage(BaseModel):
     """One scored chunk of OSM documentation."""

@@ -19,11 +19,9 @@ Orchestration**. See [docs/architecture.md](docs/architecture.md).
 
 ## Status
 
-Foundation, knowledge persistence, and whitelisted OSM wiki ingestion. The
-application starts, the health endpoint works, knowledge tables are migrated,
-and the corpus can be fetched into PostgreSQL without embeddings yet.
-Embedding/retrieval, the Overpass HTTP client and the agent loop are next - see
-[Roadmap](#roadmap).
+Foundation through knowledge retrieval. The corpus can be ingested and indexed
+with BGE-M3 into pgvector, and `search_osm_knowledge` is registered. The
+Overpass HTTP client and the agent loop are next - see [Roadmap](#roadmap).
 
 ## Requirements
 
@@ -95,11 +93,42 @@ heading-aware, and upsert into `knowledge_documents` / `knowledge_chunks`
 ./.venv/bin/python -m app.cli ingest-osm-knowledge
 ```
 
+## Index embeddings (BGE-M3)
+
+Requires the optional embeddings extra and a local Hugging Face cache of
+`BAAI/bge-m3` (no automatic download):
+
+```bash
+./.venv/bin/pip install -e ".[embeddings]"
+./.venv/bin/python -m app.cli index-osm-knowledge
+```
+
+Re-embed everything:
+
+```bash
+./.venv/bin/python -m app.cli index-osm-knowledge --force
+```
+
+Diagnostic retrieval (cosine similarity; higher score is better):
+
+```bash
+./.venv/bin/python -m app.cli search-osm-knowledge --query "پارک عمومی در OSM با چه تگی مشخص می‌شود؟"
+```
+
+`BGE_DEVICE` defaults to `cpu` so Ollama can keep the GPU. Set `BGE_DEVICE=cuda`
+only when you intentionally want embeddings on the GPU.
+
+Optional real-model integration test:
+
+```bash
+RUN_INTEGRATION=1 ./.venv/bin/pytest -m integration
+```
+
 ## Roadmap
 
 1. ~~`knowledge_documents` / `knowledge_chunks` models and the first migration~~
 2. ~~OSM wiki ingestion for the eight whitelisted pages, plus chunking~~
-3. BGE-M3 indexing and pgvector similarity retrieval
+3. ~~BGE-M3 indexing and pgvector similarity retrieval~~
 4. The Overpass HTTP client and the Overpass-to-GeoJSON encoder
 5. The bounded agent loop and the `/agent/query` endpoint
 6. A map UI
