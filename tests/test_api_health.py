@@ -47,6 +47,8 @@ async def test_application_state_exposes_shared_resources(settings: Settings):
             "search_osm_knowledge",
         )
         assert app.state.query_osm_tool is not None
+        assert app.state.llm_provider is not None
+        assert app.state.geo_agent is not None
         assert app.state.database is not None
         assert app.state.embedding_provider is not None
         assert not app.state.embedding_provider.is_loaded

@@ -1,10 +1,10 @@
 """Prompted JSON tool-call protocol.
 
-The locally installed model (``deepseek-r1:7b``) advertises the capabilities
-``completion`` and ``thinking`` but *not* ``tools``, so Ollama's native
-tool-calling field cannot be relied upon. This module implements the fallback:
-tools are described in the system prompt and the model answers with a JSON
-object, which is parsed back into :class:`ToolCall` values.
+``/api/tags`` for the configured local model reports ``completion`` and
+``thinking`` without advertising ``tools``. Prompted mode is therefore the safe
+default: tools are described in the system prompt and the model answers with a
+JSON object, which is parsed back into :class:`ToolCall` values. Native Ollama
+tool calling remains available for models that support it.
 
 It also strips the model's hidden reasoning. Reasoning is discarded here and
 never reaches the orchestrator, the trace, the API, or the database.

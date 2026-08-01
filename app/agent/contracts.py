@@ -7,6 +7,7 @@ never traced, returned or stored.
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from typing import Any, Literal, Protocol, runtime_checkable
 
@@ -17,6 +18,7 @@ from app.rag.contracts import RetrievedPassage
 
 TraceEventKind = Literal[
     "request_received",
+    "llm_turn",
     "tool_call",
     "tool_result",
     "tool_error",
@@ -45,6 +47,7 @@ class TraceEvent(BaseModel):
     message: str = Field(description="Human-readable operational summary.")
     round_index: int = Field(default=0, ge=0)
     tool_name: str | None = None
+    error_code: str | None = None
     at: datetime = Field(default_factory=_now)
 
 
@@ -86,6 +89,8 @@ class GeoAgentResponse(BaseModel):
     feature_count: int | None = Field(default=None, ge=0)
     passages: list[RetrievedPassage] = Field(default_factory=list)
     overpass_query: str | None = None
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
     stop_reason: StopReason = "final_answer"
     model: str = ""
 
@@ -108,6 +113,7 @@ class TraceRecorder(Protocol):
         *,
         round_index: int = 0,
         tool_name: str | None = None,
+        error_code: str | None = None,
     ) -> None: ...
 
     @property
@@ -127,6 +133,7 @@ class ListTraceRecorder:
         *,
         round_index: int = 0,
         tool_name: str | None = None,
+        error_code: str | None = None,
     ) -> None:
         self._events.append(
             TraceEvent(
@@ -134,6 +141,7 @@ class ListTraceRecorder:
                 message=message,
                 round_index=round_index,
                 tool_name=tool_name,
+                error_code=error_code,
             )
         )
 
@@ -154,3 +162,11 @@ def describe_payload(payload: Any) -> str:
     if isinstance(passage_count, int):
         return f"received {passage_count} documentation passage(s)"
     return "received a structured result"
+
+
+def summarise_arguments(arguments: dict[str, Any], *, max_chars: int = 180) -> str:
+    """Compact argument summary for the operational trace (never full payloads)."""
+    text = json.dumps(arguments, ensure_ascii=False, sort_keys=True, default=str)
+    if len(text) <= max_chars:
+        return text
+    return text[: max_chars - 3] + "..."

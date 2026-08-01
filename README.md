@@ -19,10 +19,10 @@ Orchestration**. See [docs/architecture.md](docs/architecture.md).
 
 ## Status
 
-Foundation through live OSM retrieval. Documentation search
-(`search_osm_knowledge`) and the Overpass tool (`query_osm`) are registered.
-The bounded agent loop and `/agent/query` endpoint are next - see
-[Roadmap](#roadmap).
+Foundation through bounded planner-executor orchestration. Both tools are
+registered, the Ollama-backed agent loop is implemented, and a developer CLI
+diagnostic is available. The production `/agent/query` endpoint and map UI are
+next - see [Roadmap](#roadmap).
 
 ## Requirements
 
@@ -131,14 +131,30 @@ Live Overpass only (still requires `RUN_INTEGRATION=1`):
 RUN_INTEGRATION=1 ./.venv/bin/pytest -m integration tests/test_overpass_integration.py
 ```
 
+## Agent diagnostic (developer)
+
+Run one bounded planner-executor request with the configured Ollama model,
+retrieval stack and Overpass client (not the production API):
+
+```bash
+./.venv/bin/python -m app.cli agent-query --message "Find public parks in Berlin"
+```
+
+Optional real-Ollama integration test:
+
+```bash
+RUN_INTEGRATION=1 ./.venv/bin/pytest -m integration tests/test_agent_integration.py
+```
+
 ## Roadmap
 
 1. ~~`knowledge_documents` / `knowledge_chunks` models and the first migration~~
 2. ~~OSM wiki ingestion for the eight whitelisted pages, plus chunking~~
 3. ~~BGE-M3 indexing and pgvector similarity retrieval~~
 4. ~~The Overpass HTTP client, GeoJSON encoder, and registered `query_osm`~~
-5. The bounded agent loop and the `/agent/query` endpoint
-6. A map UI
+5. ~~Bounded planner-executor agent loop (Ollama + Tool Registry)~~
+6. The production `/agent/query` FastAPI endpoint
+7. A map UI
 
 ## Data and licensing
 

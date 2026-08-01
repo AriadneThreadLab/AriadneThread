@@ -114,13 +114,16 @@ skipped with an explicit warning - geometry is never invented. Properties keep
 
 ## 4. Bounded tool loop
 
+Implemented by `PlannerExecutorAgent` (`app/agent/orchestrator.py`):
+
 1. Send the conversation and the tool definitions to the model.
-2. Receive zero or more tool calls.
+2. Receive zero or more tool calls (prompted JSON protocol by default).
 3. Validate each call against the registry (tool exists, arguments match).
 4. Execute only registered tools.
-5. Append a compact structured observation per call.
-6. Call the model again.
-7. Stop on a final answer, or when a limit is reached.
+5. Append a compact structured observation per call (never full GeoJSON).
+6. Accumulate structured payloads (`ResultAccumulator`) for the API/UI.
+7. Call the model again.
+8. Stop on a final answer, or when a limit is reached.
 
 Limits (`app/agent/loop.py`) are `AGENT_MAX_TOOL_ROUNDS` and
 `AGENT_MAX_TOOL_CALLS`; per-request network timeouts and response size caps
@@ -128,10 +131,13 @@ apply on top. Tool failures are *not* exceptions to the loop - they become
 structured observations (`tool_not_registered`, `tool_argument_error`,
 `tool_timeout`, ...) so the model can correct itself within the budget.
 
+The production HTTP endpoint is deferred; developers can run one request with
+`python -m app.cli agent-query --message "..."`.
+
 ## 5. Traceability and hidden reasoning
 
-The trace contains operational events only: `request_received`, `tool_call`,
-`tool_result`, `tool_error`, `final_answer`, `stopped`.
+The trace contains operational events only: `request_received`, `llm_turn`,
+`tool_call`, `tool_result`, `tool_error`, `final_answer`, `stopped`.
 
 The installed model emits `<think>...</think>` reasoning. It is stripped at the
 provider boundary (`app/llm/tool_protocol.py`) before anything else sees the
@@ -143,9 +149,9 @@ reply, and is never traced, returned or persisted.
 `ToolCall`, `LLMResponse` and the `LLMProvider` protocol. `OllamaProvider` is
 the only module that knows Ollama's HTTP shape.
 
-The installed model `deepseek-r1:7b` reports capabilities
-`["completion", "thinking"]` - it does **not** advertise `tools`. The provider
-therefore supports two tool-calling modes:
+`/api/tags` for the configured model reports `completion` and `thinking`
+without advertising `tools` (prompted mode is therefore the safe default). The
+provider supports two tool-calling modes that share the same tool contracts:
 
 - `prompted` (default): tool schemas are rendered into the system prompt and
   the model replies with `{"tool_calls": [...]}` or `{"final_answer": "..."}`;
@@ -211,7 +217,7 @@ passages are not left searchable. Embeddings are written by
 ```
 app/
   api/          FastAPI routes and dependencies (health)
-  agent/        request/response/trace contracts, loop bounds, system prompt
+  agent/        contracts, loop bounds, accumulator, orchestrator, prompt
   core/         settings, logging, error hierarchy
   db/           declarative base, async engine and session lifecycle
   embeddings/   EmbeddingProvider protocol, lazy BGE-M3 provider
@@ -219,7 +225,7 @@ app/
   osm/          query spec, builder, Overpass client, GeoJSON encoder
   rag/          retrieval contracts, whitelist, MediaWiki ingest, chunking
   tools/        Tool protocol, registry, search_osm_knowledge, query_osm
-  cli.py        maintenance commands (`ingest-osm-knowledge`, indexing, search)
+  cli.py        ingest/index/search + developer `agent-query`
 ```
 
 Dependency direction is inward: `api` → `agent` → `tools` → (`rag`, `osm`) →

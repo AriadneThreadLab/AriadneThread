@@ -34,6 +34,13 @@ def test_parser_accepts_search_command():
     assert args.top_k == 3
 
 
+def test_parser_accepts_agent_query_command():
+    parser = build_parser()
+    args = parser.parse_args(["agent-query", "--message", "Find public parks in Berlin"])
+    assert args.command == "agent-query"
+    assert args.message == "Find public parks in Berlin"
+
+
 def test_unknown_command_exits():
     with pytest.raises(SystemExit):
         main(["definitely-not-a-command"])

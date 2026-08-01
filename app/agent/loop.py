@@ -1,8 +1,8 @@
 """Bounds for the planner-executor tool loop.
 
-The loop itself (LLM call, tool dispatch, re-planning) is implemented in the
-next phase; its termination rules live here so they are enforced in one place
-and can be tested without a model or a network.
+:class:`LoopBudget` is the single enforcement point for
+``AGENT_MAX_TOOL_ROUNDS`` and ``AGENT_MAX_TOOL_CALLS``. The orchestrator in
+``app.agent.orchestrator`` consumes these counters each tool round.
 """
 
 from __future__ import annotations

@@ -3,6 +3,9 @@
 Long-lived resources are created once at startup, attached to ``app.state`` and
 released at shutdown. Nothing connects to PostgreSQL, Ollama or Hugging Face at
 import time. The BGE-M3 model is constructed lazily and only loaded on first use.
+
+Phase 5 wires the planner-executor agent into application state. The production
+``/agent/query`` HTTP endpoint is intentionally deferred to Phase 6.
 """
 
 from __future__ import annotations
@@ -16,12 +19,14 @@ from fastapi.responses import JSONResponse
 from starlette.requests import Request
 
 from app import __version__
+from app.agent.factory import build_geo_agent
 from app.api.health import router as health_router
 from app.core.config import Settings, get_settings
 from app.core.errors import GeoAgentError
 from app.core.logging import configure_logging
 from app.db.session import Database, DatabaseConfig
 from app.embeddings.factory import build_bge_m3_provider
+from app.llm.factory import build_ollama_provider
 from app.osm.factory import build_query_osm_tool
 from app.rag.retriever import SessionBoundKnowledgeRetriever
 from app.tools.factory import build_tool_registry
@@ -40,24 +45,30 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         embedder = build_bge_m3_provider(resolved)
         retriever = SessionBoundKnowledgeRetriever(database, embedder)
         query_osm_tool = build_query_osm_tool(resolved)
-        app.state.settings = resolved
-        app.state.database = database
-        app.state.embedding_provider = embedder
-        app.state.query_osm_tool = query_osm_tool
-        app.state.tool_registry = build_tool_registry(
+        llm = build_ollama_provider(resolved)
+        registry = build_tool_registry(
             knowledge_retriever=retriever,
             query_osm_tool=query_osm_tool,
             rag_top_k=resolved.rag_top_k,
         )
+        agent = build_geo_agent(llm, registry, resolved)
+        app.state.settings = resolved
+        app.state.database = database
+        app.state.embedding_provider = embedder
+        app.state.query_osm_tool = query_osm_tool
+        app.state.llm_provider = llm
+        app.state.tool_registry = registry
+        app.state.geo_agent = agent
         logger.info(
             "OSM GeoAgent starting (env=%s, model=%s, tools=%s)",
             resolved.app_env,
             resolved.ollama_model,
-            ",".join(app.state.tool_registry.names) or "none",
+            ",".join(registry.names) or "none",
         )
         try:
             yield
         finally:
+            await llm.aclose()
             await query_osm_tool.aclose()
             await embedder.aclose()
             await database.dispose()
