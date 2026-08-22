@@ -31,6 +31,25 @@ def _tag_selector(tag: TagFilter) -> str:
     return f"[{_literal(tag.key)}={_literal(tag.value)}]"
 
 
+def place_area_name(place: str) -> str:
+    """Primary toponym used for Overpass area lookup.
+
+    Named places often arrive as ``City, Country``. OSM ``name`` / ``name:en``
+    for the administrative area is typically the city alone; using the full
+    ``City, Country`` string commonly misses the area and forces expensive
+    fallbacks that time out. Scope summaries still keep the full user place.
+    """
+    primary = place.split(",", 1)[0].strip()
+    return primary or place.strip()
+
+
+def _area_lookup(place: str) -> str:
+    """Match ``name`` or ``name:en`` for the primary toponym into ``searchArea``."""
+    primary = place_area_name(place)
+    quoted = _literal(primary)
+    return f'(\n  area["name"={quoted}];\n  area["name:en"={quoted}];\n)->.{_AREA_SET};'
+
+
 def _spatial_filter(query: OsmFeatureQuery) -> str:
     if query.point is not None:
         point = query.point
@@ -50,17 +69,30 @@ def build_overpass_query(query: OsmFeatureQuery, *, timeout_seconds: int) -> str
 
     ``out geom`` is used when geometry is requested and ``out center``
     otherwise, so way and relation results always carry a usable position.
+    The ``out … N`` clause asks Overpass to bound the result set; the tool
+    also caps features during GeoJSON normalization as a hard safety limit.
     """
     if timeout_seconds <= 0:
         raise OverpassQueryBuildError("timeout_seconds must be positive")
 
-    selectors = "".join(_tag_selector(tag) for tag in query.tags)
     spatial = _spatial_filter(query)
-    body = "\n".join(_statement(kind, selectors, spatial) for kind in query.ordered_element_types)
+    if query.tag_match == "any":
+        statements: list[str] = []
+        for tag in query.tags:
+            selectors = _tag_selector(tag)
+            statements.extend(
+                _statement(kind, selectors, spatial) for kind in query.ordered_element_types
+            )
+        body = "\n".join(statements)
+    else:
+        selectors = "".join(_tag_selector(tag) for tag in query.tags)
+        body = "\n".join(
+            _statement(kind, selectors, spatial) for kind in query.ordered_element_types
+        )
 
     lines = [f"[out:json][timeout:{timeout_seconds}];"]
     if query.place is not None:
-        lines.append(f"area[{_literal('name')}={_literal(query.place)}]->.{_AREA_SET};")
+        lines.append(_area_lookup(query.place))
     lines.append("(")
     lines.append(body)
     lines.append(");")

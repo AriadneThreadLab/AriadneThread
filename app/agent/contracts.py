@@ -13,12 +13,16 @@ from typing import Any, Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.analytics.contracts import AnalysisBlock
+from app.execution_memory.contracts import ExecutionMemoryTrace
 from app.osm.contracts import GeoJsonFeatureCollection
 from app.rag.contracts import RetrievedPassage
 
 TraceEventKind = Literal[
     "request_received",
     "llm_turn",
+    "memory_reuse",
+    "protocol_repair",
     "tool_call",
     "tool_result",
     "tool_error",
@@ -48,6 +52,8 @@ class TraceEvent(BaseModel):
     round_index: int = Field(default=0, ge=0)
     tool_name: str | None = None
     error_code: str | None = None
+    # Safe operational metadata only (scope, tags, counts, durations, codes).
+    details: dict[str, Any] | None = None
     at: datetime = Field(default_factory=_now)
 
 
@@ -70,7 +76,12 @@ class GeoAgentRequest(BaseModel):
     conversation_id: str | None = Field(
         default=None,
         max_length=64,
-        description="Optional client-supplied identifier for correlating runs.",
+        description="Client-supplied identifier that correlates follow-up executions.",
+    )
+    request_id: str | None = Field(
+        default=None,
+        max_length=64,
+        description="HTTP correlation id when the request arrived via the API.",
     )
 
 
@@ -93,6 +104,20 @@ class GeoAgentResponse(BaseModel):
     errors: list[str] = Field(default_factory=list)
     stop_reason: StopReason = "final_answer"
     model: str = ""
+    effective_limit: int | None = Field(default=None, ge=0)
+    scope_summary: str | None = None
+    validated_tags: list[str] = Field(default_factory=list)
+    live_query_failed: bool = False
+    live_error_code: str | None = None
+    analysis: AnalysisBlock | None = Field(
+        default=None,
+        description="Present only when analyze_features ran in this request.",
+    )
+    conversation_id: str | None = None
+    execution_memory: ExecutionMemoryTrace | None = Field(
+        default=None,
+        description="Structured Execution Memory provenance; never chain-of-thought.",
+    )
 
 
 @runtime_checkable
@@ -114,6 +139,7 @@ class TraceRecorder(Protocol):
         round_index: int = 0,
         tool_name: str | None = None,
         error_code: str | None = None,
+        details: dict[str, Any] | None = None,
     ) -> None: ...
 
     @property
@@ -134,6 +160,7 @@ class ListTraceRecorder:
         round_index: int = 0,
         tool_name: str | None = None,
         error_code: str | None = None,
+        details: dict[str, Any] | None = None,
     ) -> None:
         self._events.append(
             TraceEvent(
@@ -142,6 +169,7 @@ class ListTraceRecorder:
                 round_index=round_index,
                 tool_name=tool_name,
                 error_code=error_code,
+                details=details,
             )
         )
 
@@ -155,12 +183,29 @@ class ListTraceRecorder:
 
 def describe_payload(payload: Any) -> str:
     """Short, safe description of a tool payload for tracing."""
+    place_ref = getattr(payload, "place_ref", None)
+    status = getattr(payload, "status", None)
+    label = getattr(payload, "label", None)
+    if isinstance(place_ref, str) and status == "resolved":
+        source = getattr(payload, "source", None)
+        target = label if isinstance(label, str) else place_ref
+        source_bit = f" source={source}" if isinstance(source, str) else ""
+        return f"Resolved comparison target target={target}{source_bit} status=completed"
     feature_count = getattr(payload, "feature_count", None)
     if isinstance(feature_count, int):
+        analysis_target = getattr(payload, "analysis_target", None)
+        if isinstance(analysis_target, str) and analysis_target:
+            return f"received {feature_count} feature(s) for {analysis_target}"
         return f"received {feature_count} feature(s)"
     passage_count = getattr(payload, "passage_count", None)
     if isinstance(passage_count, int):
         return f"received {passage_count} documentation passage(s)"
+    metrics_computed = getattr(payload, "metrics_computed", None)
+    if isinstance(metrics_computed, int):
+        analysis_status = getattr(payload, "analysis_status", None)
+        if analysis_status:
+            return f"analytics {analysis_status}; computed {metrics_computed} metric(s)"
+        return f"computed {metrics_computed} metric(s)"
     return "received a structured result"
 
 

@@ -13,6 +13,7 @@ from app.core.errors import LLMTimeoutError, ToolExecutionError, ToolTimeoutErro
 from app.llm.contracts import ChatMessage, LLMOptions, LLMResponse, ToolCall, ToolDefinition
 from app.osm.contracts import OSM_ATTRIBUTION, GeoJsonFeatureCollection
 from app.rag.contracts import OSM_KNOWLEDGE_DOMAIN, RetrievedPassage
+from app.tools.context import ToolContext
 from app.tools.contracts import ToolOutcome
 from app.tools.query_osm import OsmQuerySource, QueryOsmResult
 from app.tools.registry import ToolRegistry
@@ -52,6 +53,10 @@ class ScriptedLLM:
     def model_name(self) -> str:
         return "fake-model"
 
+    @property
+    def provider_name(self) -> str:
+        return "fake"
+
     async def chat(
         self,
         messages: list[ChatMessage],
@@ -81,7 +86,10 @@ class FakeKnowledgeTool:
         self.passages = passages if passages is not None else [_PASSAGE]
         self.calls: list[SearchOsmKnowledgeArgs] = []
 
-    async def execute(self, args: SearchOsmKnowledgeArgs) -> ToolOutcome[SearchOsmKnowledgeResult]:
+    async def execute(
+        self, args: SearchOsmKnowledgeArgs, context: ToolContext
+    ) -> ToolOutcome[SearchOsmKnowledgeResult]:
+        del context
         self.calls.append(args)
         result = SearchOsmKnowledgeResult(query=args.query, passages=self.passages)
         return ToolOutcome(
@@ -119,7 +127,8 @@ class FakeQueryOsmTool:
         self.fail_with = fail_with
         self.calls: list[QueryArgs] = []
 
-    async def execute(self, args: QueryArgs) -> ToolOutcome[QueryOsmResult]:
+    async def execute(self, args: QueryArgs, context: ToolContext) -> ToolOutcome[QueryOsmResult]:
+        del context
         self.calls.append(args)
         if self.fail_with is not None:
             raise self.fail_with
@@ -132,6 +141,8 @@ class FakeQueryOsmTool:
                 retrieved_at=datetime(2026, 8, 1, tzinfo=timezone.utc),
             ),
             warnings=[],
+            effective_limit=20,
+            scope_summary=f"Search area: {args.place}",
         )
         return ToolOutcome(
             observation=(
@@ -217,6 +228,11 @@ async def test_explicit_tag_routes_directly_to_query_osm():
         "llm_turn",
         "final_answer",
     ]
+    second_turn = llm.seen[1]
+    assistant = next(message for message in second_turn if message.role == "assistant")
+    assert assistant.tool_calls[0].id == "c1"
+    observation = next(message for message in second_turn if message.role == "tool")
+    assert observation.tool_call_id == "c1"
 
 
 async def test_ambiguous_concept_routes_rag_then_query_osm():
@@ -343,8 +359,10 @@ async def test_malformed_tool_arguments_are_reported():
         _registry(query),
     )
     result = await agent.run(GeoAgentRequest(message="Find parks"))
-    assert any("tool_argument_error" in error for error in result.errors)
+    # Correctable argument errors stay in warnings when the loop recovers.
+    assert any("tool_argument_error" in warning for warning in result.warnings)
     assert query.calls == []
+    assert any(event.kind == "tool_error" for event in result.trace)
 
 
 async def test_malformed_prompted_json_triggers_protocol_repair_then_answer():
@@ -356,9 +374,9 @@ async def test_malformed_prompted_json_triggers_protocol_repair_then_answer():
         _registry(FakeKnowledgeTool()),
     )
     result = await agent.run(GeoAgentRequest(message="Find parks"))
-    assert any("llm_protocol_error" in error for error in result.errors)
+    assert any("llm_protocol_error" in warning for warning in result.warnings)
     assert result.answer == "Recovered after protocol error."
-    assert any("Protocol error" in message.content for message in llm.seen[1])
+    assert any("protocol_error" in message.content for message in llm.seen[1])
 
 
 async def test_empty_native_style_reply_is_protocol_error():
@@ -370,7 +388,7 @@ async def test_empty_native_style_reply_is_protocol_error():
         _registry(FakeKnowledgeTool()),
     )
     result = await agent.run(GeoAgentRequest(message="Find parks"))
-    assert any("llm_protocol_error" in error for error in result.errors)
+    assert any("llm_protocol_error" in warning for warning in result.warnings)
 
 
 async def test_tool_timeout_is_observed_not_success():

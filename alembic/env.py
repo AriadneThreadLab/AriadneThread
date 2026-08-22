@@ -13,7 +13,15 @@ from logging.config import fileConfig
 from alembic import context
 from app.core.config import get_settings
 from app.db.base import Base
-from app.db.models import KnowledgeChunk, KnowledgeDocument
+from app.db.models import (
+    ActiveLearningCandidateRow,
+    ActiveLearningReviewRow,
+    ExecutionMemoryDatasetRow,
+    ExecutionMemoryRow,
+    KnowledgeChunk,
+    KnowledgeDocument,
+    TrainingDatasetExportRow,
+)
 from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
@@ -26,9 +34,18 @@ if config.config_file_name is not None:
 settings = get_settings()
 config.set_main_option("sqlalchemy.url", settings.database_url)
 
-# Model imports above ensure Base.metadata contains knowledge tables.
+# Model imports above ensure Base.metadata contains the knowledge and
+# active-learning tables.
 target_metadata = Base.metadata
-_ = (KnowledgeDocument, KnowledgeChunk)
+_ = (
+    KnowledgeDocument,
+    KnowledgeChunk,
+    ActiveLearningCandidateRow,
+    ActiveLearningReviewRow,
+    TrainingDatasetExportRow,
+    ExecutionMemoryRow,
+    ExecutionMemoryDatasetRow,
+)
 
 
 _POSTGIS_TABLES = frozenset({"spatial_ref_sys", "geography_columns", "geometry_columns"})

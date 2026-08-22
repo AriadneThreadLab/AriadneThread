@@ -1,0 +1,75 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ariadne-finetuning"
+version = "0.1.0"
+description = "Offline QLoRA fine-tuning and evaluation pipeline for Ariadne Thread planning."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+
+# The core package is dependency-light on purpose: dataset validation, metrics,
+# evaluation, the registry and the pipeline all run without a training stack.
+dependencies = [
+    "pyyaml>=6,<7",
+]
+
+[project.optional-dependencies]
+# Installed only where training actually happens (a GPU box or Colab).
+train = [
+    "torch>=2.2",
+    "transformers>=4.44",
+    "datasets>=2.20",
+    "peft>=0.12",
+    "trl>=0.11",
+    "bitsandbytes>=0.43",
+    "accelerate>=0.33",
+]
+dev = [
+    "pytest>=8.2,<9",
+    "ruff>=0.5,<0.13",
+    "mypy>=1.10,<2",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["ariadne_finetuning*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "ANN", "RUF"]
+ignore = ["ANN401"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["ANN001", "ANN002", "ANN003", "ANN201", "ANN202", "ANN204"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+mypy_path = "src"
+
+[[tool.mypy.overrides]]
+module = ["torch.*", "transformers.*", "peft.*", "trl.*", "datasets.*", "yaml.*"]
+ignore_missing_imports = true
+
+# The Hugging Face training APIs are largely untyped; the wrappers around them
+# stay strictly typed at their own boundary.
+[[tool.mypy.overrides]]
+module = ["ariadne_finetuning.modeling", "ariadne_finetuning.training"]
+disallow_untyped_calls = false
+
+[[tool.mypy.overrides]]
+module = ["tests.*"]
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+disallow_untyped_calls = false

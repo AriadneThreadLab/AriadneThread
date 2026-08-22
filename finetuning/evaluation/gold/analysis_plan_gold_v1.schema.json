@@ -1,0 +1,297 @@
+{
+  "$defs": {
+    "AnalysisTarget": {
+      "additionalProperties": false,
+      "description": "One comparison target bound to a request-scoped dataset reference.",
+      "properties": {
+        "dataset_ref": {
+          "pattern": "^osm_result_(?:[1-9]|[1-9][0-9])$",
+          "title": "Dataset Ref",
+          "type": "string"
+        },
+        "label": {
+          "maxLength": 80,
+          "minLength": 1,
+          "title": "Label",
+          "type": "string"
+        },
+        "reference_points": {
+          "items": {
+            "$ref": "#/$defs/GeoPoint"
+          },
+          "maxItems": 4,
+          "title": "Reference Points",
+          "type": "array"
+        },
+        "target_id": {
+          "pattern": "^[a-z][a-z0-9_]{0,31}$",
+          "title": "Target Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "target_id",
+        "label",
+        "dataset_ref"
+      ],
+      "title": "AnalysisTarget",
+      "type": "object"
+    },
+    "GeoPoint": {
+      "additionalProperties": false,
+      "description": "WGS84 point used as a distance reference origin.",
+      "properties": {
+        "lat": {
+          "maximum": 90,
+          "minimum": -90,
+          "title": "Lat",
+          "type": "number"
+        },
+        "lon": {
+          "maximum": 180,
+          "minimum": -180,
+          "title": "Lon",
+          "type": "number"
+        }
+      },
+      "required": [
+        "lat",
+        "lon"
+      ],
+      "title": "GeoPoint",
+      "type": "object"
+    },
+    "MetricRequest": {
+      "additionalProperties": false,
+      "description": "One metric the model proposes for the plan.",
+      "properties": {
+        "claimed_rule_ids": {
+          "items": {
+            "enum": [
+              "ABUNDANCE_COUNT_001",
+              "CONCENTRATION_DENSITY_001",
+              "ACCESSIBILITY_DISTANCE_001",
+              "TOTAL_PROVISION_SUM_001",
+              "GREENSPACE_TOTAL_AREA_001",
+              "TYPICAL_VALUE_MEDIAN_001",
+              "EXPLICIT_AVERAGE_MEAN_001",
+              "VARIABILITY_STDDEV_001",
+              "COVERAGE_PERCENTAGE_001",
+              "RELATIVE_SHARE_RATIO_001",
+              "RANGE_EXTREMES_001"
+            ],
+            "type": "string"
+          },
+          "maxItems": 3,
+          "title": "Claimed Rule Ids",
+          "type": "array"
+        },
+        "direction": {
+          "anyOf": [
+            {
+              "enum": [
+                "higher_is_better",
+                "lower_is_better",
+                "neutral"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Direction"
+        },
+        "inferred_goal": {
+          "enum": [
+            "abundance",
+            "concentration",
+            "accessibility",
+            "total_provision",
+            "typical_value",
+            "variability",
+            "coverage",
+            "relative_share"
+          ],
+          "title": "Inferred Goal",
+          "type": "string"
+        },
+        "metric": {
+          "enum": [
+            "count",
+            "density",
+            "sum",
+            "mean",
+            "median",
+            "standard_deviation",
+            "min",
+            "max",
+            "ratio",
+            "total_area",
+            "mean_area",
+            "median_area",
+            "nearest_distance",
+            "mean_nearest_distance",
+            "median_nearest_distance",
+            "coverage_percentage"
+          ],
+          "title": "Metric",
+          "type": "string"
+        },
+        "property_key": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "pattern": "^[A-Za-z][A-Za-z0-9_:-]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Property Key"
+        },
+        "ratio": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RatioSpec"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "role": {
+          "default": "supporting",
+          "enum": [
+            "primary",
+            "supporting"
+          ],
+          "title": "Role",
+          "type": "string"
+        },
+        "user_explicit": {
+          "default": false,
+          "title": "User Explicit",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "metric",
+        "inferred_goal"
+      ],
+      "title": "MetricRequest",
+      "type": "object"
+    },
+    "RatioSpec": {
+      "additionalProperties": false,
+      "description": "Numerator/denominator pair for the bounded ratio metric.",
+      "properties": {
+        "denominator": {
+          "enum": [
+            "count",
+            "density",
+            "sum",
+            "mean",
+            "median",
+            "standard_deviation",
+            "min",
+            "max",
+            "ratio",
+            "total_area",
+            "mean_area",
+            "median_area",
+            "nearest_distance",
+            "mean_nearest_distance",
+            "median_nearest_distance",
+            "coverage_percentage"
+          ],
+          "title": "Denominator",
+          "type": "string"
+        },
+        "numerator": {
+          "enum": [
+            "count",
+            "density",
+            "sum",
+            "mean",
+            "median",
+            "standard_deviation",
+            "min",
+            "max",
+            "ratio",
+            "total_area",
+            "mean_area",
+            "median_area",
+            "nearest_distance",
+            "mean_nearest_distance",
+            "median_nearest_distance",
+            "coverage_percentage"
+          ],
+          "title": "Numerator",
+          "type": "string"
+        }
+      },
+      "required": [
+        "numerator",
+        "denominator"
+      ],
+      "title": "RatioSpec",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Validated analytical plan — the argument model for analyze_features.",
+  "properties": {
+    "analysis_type": {
+      "enum": [
+        "single_target",
+        "comparison"
+      ],
+      "title": "Analysis Type",
+      "type": "string"
+    },
+    "comparison_goal": {
+      "maxLength": 200,
+      "minLength": 3,
+      "title": "Comparison Goal",
+      "type": "string"
+    },
+    "feature_concept": {
+      "maxLength": 80,
+      "minLength": 1,
+      "title": "Feature Concept",
+      "type": "string"
+    },
+    "metrics": {
+      "items": {
+        "$ref": "#/$defs/MetricRequest"
+      },
+      "maxItems": 4,
+      "minItems": 1,
+      "title": "Metrics",
+      "type": "array"
+    },
+    "targets": {
+      "items": {
+        "$ref": "#/$defs/AnalysisTarget"
+      },
+      "maxItems": 4,
+      "minItems": 1,
+      "title": "Targets",
+      "type": "array"
+    }
+  },
+  "required": [
+    "analysis_type",
+    "feature_concept",
+    "comparison_goal",
+    "targets",
+    "metrics"
+  ],
+  "title": "AnalysisPlan",
+  "type": "object"
+}

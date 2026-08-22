@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Ariadne Thread</title>
+    <meta
+      name="description"
+      content="Knowledge-grounded OpenStreetMap search and analysis"
+    />
+    <meta property="og:title" content="Ariadne Thread" />
+    <meta
+      property="og:description"
+      content="Knowledge-grounded OpenStreetMap search and analysis"
+    />
+    <link rel="icon" type="image/png" href="/static/img/ariadne-icon.png" />
+    <link rel="apple-touch-icon" href="/static/img/ariadne-icon.png" />
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css"
+      crossorigin="anonymous"
+    />
+    <link rel="stylesheet" href="/static/css/app.css" />
+  </head>
+  <body data-ui-state="idle">
+    <a class="skip-link" href="#query-input">Skip to question input</a>
+
+    <header class="topbar" aria-label="Ariadne Thread application header">
+      <div class="brand-block">
+        <img
+          class="brand-logo"
+          src="/static/img/ariadne-icon.png"
+          alt="Ariadne Thread logo"
+          width="72"
+          height="48"
+        />
+        <div class="brand-copy">
+          <h1>Ariadne Thread</h1>
+          <p class="tagline">Knowledge-grounded OpenStreetMap search and analysis</p>
+        </div>
+      </div>
+      <div class="topbar-meta">
+        <div class="health" aria-live="polite">
+          <span id="health-dot" class="health-dot" data-state="unknown" aria-hidden="true"></span>
+          <span id="health-label">Checking service…</span>
+        </div>
+        <div id="request-chip" class="chip chip-idle" aria-live="polite">Ready</div>
+        <div id="model-chip" class="chip chip-muted">Model: —</div>
+      </div>
+    </header>
+
+    <div class="app-shell">
+      <aside class="panel panel-left" aria-label="Query and analysis">
+        <section class="card query-section" aria-labelledby="query-heading">
+          <h2 id="query-heading">Ask a geographic question</h2>
+          <form id="query-form" data-api-path="/api/v1/agent/query" novalidate>
+            <label class="sr-only" for="query-input">Geographic question</label>
+            <textarea
+              id="query-input"
+              name="message"
+              rows="4"
+              maxlength="2000"
+              required
+              placeholder="Find public parks around Istanbul Technical University. Return at most 20 features."
+              autocomplete="off"
+            ></textarea>
+            <div class="form-actions">
+              <button id="submit-btn" type="submit">Submit question</button>
+              <button id="clear-btn" type="button" class="btn-secondary">Clear</button>
+            </div>
+          </form>
+          <div class="examples-wrap">
+            <p class="examples-label">Example questions</p>
+            <div id="examples" class="examples" role="group" aria-label="Example questions"></div>
+          </div>
+        </section>
+
+        <div
+          id="status-banner"
+          class="status-banner"
+          role="status"
+          aria-live="polite"
+          data-kind="idle"
+        >
+          Ask a geographic question to begin.
+        </div>
+
+        <section class="card metrics-section" aria-label="Result metrics" hidden id="metrics-section">
+          <ul id="metrics" class="metrics"></ul>
+        </section>
+
+        <section class="card" aria-labelledby="answer-heading">
+          <h2 id="answer-heading">Answer</h2>
+          <div id="answer-empty" class="empty-state empty-state-branded">
+            <img
+              class="empty-logo"
+              src="/static/img/ariadne-icon.png"
+              alt=""
+              width="54"
+              height="36"
+              aria-hidden="true"
+            />
+            <p id="answer-empty-text">No answer yet.</p>
+          </div>
+          <div id="answer" class="answer-body"></div>
+          <p id="stop-reason" class="stop-reason"></p>
+        </section>
+
+        <section class="card workflow-section" aria-labelledby="workflow-heading">
+          <h2 id="workflow-heading">Analysis Workflow</h2>
+          <p id="workflow-empty" class="empty-state">
+            Operational steps will appear after a request.
+          </p>
+          <ol id="workflow" class="workflow-list" aria-label="Analysis workflow"></ol>
+        </section>
+
+        <section id="sources-section" class="card" aria-labelledby="sources-heading">
+          <h2 id="sources-heading">OSM Documentation Sources</h2>
+          <p id="sources-empty" class="empty-state">No documentation sources for this response.</p>
+          <div id="sources" class="sources"></div>
+        </section>
+
+        <section id="analysis-section" class="card" hidden aria-labelledby="analysis-heading">
+          <h2 id="analysis-heading">Comparison Report</h2>
+          <div id="comparison-report" class="report-body"></div>
+
+          <details id="analysis-method-details" class="tech-details">
+            <summary>Analysis Method</summary>
+            <dl id="analysis-method" class="analysis-method"></dl>
+            <details id="analysis-provenance-details" class="tech-details">
+              <summary>Detailed provenance</summary>
+              <div id="analysis-provenance"></div>
+            </details>
+          </details>
+        </section>
+
+        <section class="card" aria-labelledby="live-heading">
+          <h2 id="live-heading">Live OSM Results</h2>
+          <p id="live-empty" class="empty-state">
+            Live map features appear here when the Overpass tool runs.
+          </p>
+          <dl id="live-summary" class="live-summary" hidden>
+            <div>
+              <dt>Feature count</dt>
+              <dd id="feature-count">—</dd>
+            </div>
+            <div>
+              <dt>Effective limit</dt>
+              <dd id="effective-limit">—</dd>
+            </div>
+            <div>
+              <dt>Scope</dt>
+              <dd id="scope-summary">—</dd>
+            </div>
+            <div>
+              <dt>Source</dt>
+              <dd id="live-source">OpenStreetMap via Overpass API</dd>
+            </div>
+            <div>
+              <dt>Warning count</dt>
+              <dd id="warning-count">—</dd>
+            </div>
+            <div id="live-error-row" hidden>
+              <dt>Live query</dt>
+              <dd id="live-error">—</dd>
+            </div>
+          </dl>
+        </section>
+
+        <section id="warnings-section" class="card section-warnings" hidden aria-labelledby="warnings-heading">
+          <h2 id="warnings-heading">Warnings</h2>
+          <div id="warnings"></div>
+        </section>
+
+        <section id="errors-section" class="card section-errors" hidden aria-labelledby="errors-heading">
+          <h2 id="errors-heading">Errors</h2>
+          <div id="errors"></div>
+        </section>
+
+        <section class="card technical-section" aria-labelledby="technical-heading">
+          <h2 id="technical-heading">Technical Panels</h2>
+
+          <div class="tech-actions">
+            <button
+              id="download-geojson-btn"
+              type="button"
+              class="btn-secondary"
+              disabled
+              aria-describedby="download-help"
+            >
+              Download GeoJSON
+            </button>
+            <p id="download-help" class="hint">
+              Enabled after a live Overpass result is available.
+            </p>
+            <p id="download-status" class="download-status" aria-live="polite"></p>
+          </div>
+
+          <details id="geojson-details" class="tech-details" hidden>
+            <summary>GeoJSON Preview</summary>
+            <p id="geojson-preview-note" class="hint" hidden>
+              Preview truncated for display. The downloaded file contains the complete FeatureCollection.
+            </p>
+            <pre id="geojson-preview" class="code-block" tabindex="0" aria-readonly="true"></pre>
+          </details>
+
+          <details id="overpass-details" class="tech-details" hidden>
+            <summary>Generated Overpass Query</summary>
+            <div class="overpass-toolbar">
+              <button id="copy-query-btn" type="button" class="btn-secondary">Copy query</button>
+              <p class="hint">Read-only provenance. This interface cannot execute Overpass QL.</p>
+            </div>
+            <pre id="overpass-query" class="code-block" tabindex="0"></pre>
+          </details>
+        </section>
+
+        <footer class="panel-footer">
+          <p>
+            Map data ©
+            <a
+              href="https://www.openstreetmap.org/copyright"
+              target="_blank"
+              rel="noopener noreferrer"
+              >OpenStreetMap contributors</a
+            >
+            (ODbL). Documentation from the OSM Wiki.
+          </p>
+        </footer>
+      </aside>
+
+      <section class="panel panel-map" aria-label="Map">
+        <div class="map-frame">
+          <div class="map-toolbar">
+            <div class="map-toolbar-top">
+              <h2 class="map-title">Map</h2>
+              <div class="map-chips" aria-label="Map status chips">
+                <span id="map-feature-chip" class="chip chip-muted">Features: 0</span>
+                <span id="map-scope-chip" class="chip chip-muted">Scope: —</span>
+              </div>
+            </div>
+            <p id="map-message" class="map-message" aria-live="polite">
+              Submit a request to view live OpenStreetMap features.
+            </p>
+            <ul class="map-legend" aria-label="Map legend">
+              <li><span class="legend-swatch legend-point"></span> Points</li>
+              <li><span class="legend-swatch legend-line"></span> Lines</li>
+              <li><span class="legend-swatch legend-fill"></span> Polygons</li>
+              <li><span class="legend-swatch legend-area"></span> Analysis Area</li>
+            </ul>
+            <ul id="map-target-legend" class="map-legend map-target-legend" hidden aria-label="Comparison targets"></ul>
+          </div>
+          <div id="map" class="map-canvas" role="region" aria-label="Interactive map"></div>
+          <p class="map-attribution-note">
+            Basemap via OpenFreeMap. © OpenStreetMap contributors
+          </p>
+        </div>
+      </section>
+    </div>
+
+    <script
+      src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"
+      crossorigin="anonymous"
+    ></script>
+    <script type="module" src="/static/js/main.js"></script>
+  </body>
+</html>

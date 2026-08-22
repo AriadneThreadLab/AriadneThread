@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "osm-geoagent"
 version = "0.1.0"
-description = "Knowledge-grounded planner-executor GeoAgent that turns natural-language GIS requests into controlled OpenStreetMap operations."
+description = "Ariadne Thread: knowledge-grounded geographic analysis with AI agents, OpenStreetMap, and explainable workflows."
 readme = "README.md"
 requires-python = ">=3.10,<3.11"
 license = { text = "MIT" }
@@ -13,6 +13,7 @@ license = { text = "MIT" }
 dependencies = [
     "fastapi>=0.115,<0.116",
     "uvicorn[standard]>=0.30,<0.35",
+    "jinja2>=3.1,<4",
     "pydantic>=2.7,<3",
     "pydantic-settings>=2.3,<3",
     "sqlalchemy[asyncio]>=2.0.30,<2.1",
@@ -21,6 +22,7 @@ dependencies = [
     "pgvector>=0.3,<0.5",
     "geoalchemy2>=0.15,<0.18",
     "httpx>=0.27,<0.29",
+    "openai>=1.40,<2",
 ]
 
 [project.optional-dependencies]
@@ -36,8 +38,15 @@ dev = [
     "mypy>=1.10,<2",
 ]
 
+[project.urls]
+Homepage = "https://github.com/AriadneThreadLab/ariadne-thread"
+Repository = "https://github.com/AriadneThreadLab/ariadne-thread"
+
 [tool.setuptools.packages.find]
 include = ["app*"]
+
+[tool.setuptools.package-data]
+"app.web" = ["templates/*.html", "static/css/*", "static/js/*", "static/img/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -45,6 +54,7 @@ asyncio_mode = "auto"
 filterwarnings = ["error::DeprecationWarning:app.*"]
 markers = [
     "integration: real model/database checks (enable with RUN_INTEGRATION=1)",
+    "avalai: live AvalAI smoke (enable with RUN_AVALAI_SMOKE=1)",
 ]
 
 [tool.ruff]

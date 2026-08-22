@@ -5,6 +5,7 @@ from __future__ import annotations
 from app.agent.loop import LoopLimits
 from app.agent.orchestrator import PlannerExecutorAgent
 from app.core.config import Settings
+from app.execution_memory.service import ExecutionMemoryService
 from app.llm.contracts import LLMProvider
 from app.tools.registry import ToolRegistry
 
@@ -20,6 +21,12 @@ def build_geo_agent(
     llm: LLMProvider,
     registry: ToolRegistry,
     settings: Settings,
+    execution_memory: ExecutionMemoryService | None = None,
 ) -> PlannerExecutorAgent:
     """Build the bounded GeoAgent over the given registry and LLM provider."""
-    return PlannerExecutorAgent(llm, registry, build_loop_limits(settings))
+    return PlannerExecutorAgent(
+        llm,
+        registry,
+        build_loop_limits(settings),
+        execution_memory,
+    )

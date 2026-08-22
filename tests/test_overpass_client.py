@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import httpx
 import pytest
-from app.core.errors import OverpassError, ToolTimeoutError
+from app.core.errors import (
+    OverpassBadResponseError,
+    OverpassError,
+    OverpassTimeoutError,
+    OverpassUpstreamError,
+)
 from app.osm.client import HttpOverpassClient
 
 
@@ -13,6 +18,7 @@ def _client(
     *,
     max_response_bytes: int = 10_000,
     timeout_seconds: float = 5.0,
+    max_attempts: int = 1,
 ) -> HttpOverpassClient:
     transport = httpx.MockTransport(handler)  # type: ignore[arg-type]
     http = httpx.AsyncClient(transport=transport, base_url="https://overpass.test")
@@ -20,6 +26,8 @@ def _client(
         base_url="https://overpass.test/api/interpreter",
         timeout_seconds=timeout_seconds,
         max_response_bytes=max_response_bytes,
+        max_attempts=max_attempts,
+        retry_backoff_seconds=0.01,
         client=http,
     )
 
@@ -53,16 +61,25 @@ async def test_http_429_is_mapped():
 async def test_http_4xx_is_mapped():
     client = _client(lambda request: httpx.Response(400, text="bad query"))
     try:
-        with pytest.raises(OverpassError, match="HTTP 400"):
+        with pytest.raises(OverpassBadResponseError, match="HTTP 400"):
             await client.run("query")
     finally:
         await client.aclose()
 
 
 async def test_http_5xx_is_mapped():
-    client = _client(lambda request: httpx.Response(503, text="unavailable"))
+    transport = httpx.MockTransport(lambda request: httpx.Response(503, text="unavailable"))
+    http = httpx.AsyncClient(transport=transport, base_url="https://overpass.test")
+    client = HttpOverpassClient(
+        base_url="https://overpass.test/api/interpreter",
+        timeout_seconds=5.0,
+        max_response_bytes=10_000,
+        max_attempts=1,
+        retry_backoff_seconds=0.01,
+        client=http,
+    )
     try:
-        with pytest.raises(OverpassError, match="HTTP 503"):
+        with pytest.raises(OverpassUpstreamError, match="HTTP 503"):
             await client.run("query")
     finally:
         await client.aclose()
@@ -71,21 +88,30 @@ async def test_http_5xx_is_mapped():
 async def test_malformed_json_is_mapped():
     client = _client(lambda request: httpx.Response(200, text="not-json"))
     try:
-        with pytest.raises(OverpassError, match="malformed JSON"):
+        with pytest.raises(OverpassBadResponseError, match="malformed JSON"):
             await client.run("query")
     finally:
         await client.aclose()
 
 
 async def test_overpass_error_remark_is_mapped():
-    client = _client(
+    transport = httpx.MockTransport(
         lambda request: httpx.Response(
             200,
             json={"remark": "runtime error: Query timed out", "elements": []},
         )
     )
+    http = httpx.AsyncClient(transport=transport, base_url="https://overpass.test")
+    client = HttpOverpassClient(
+        base_url="https://overpass.test/api/interpreter",
+        timeout_seconds=5.0,
+        max_response_bytes=10_000,
+        max_attempts=1,
+        retry_backoff_seconds=0.01,
+        client=http,
+    )
     try:
-        with pytest.raises(OverpassError, match="Overpass reported an error"):
+        with pytest.raises(OverpassTimeoutError, match="query timeout"):
             await client.run("query")
     finally:
         await client.aclose()
@@ -105,13 +131,22 @@ async def test_non_error_remark_becomes_a_warning():
     assert any("slow" in warning for warning in response.warnings)
 
 
-async def test_timeout_becomes_tool_timeout():
+async def test_timeout_becomes_overpass_timeout():
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ReadTimeout("timed out", request=request)
 
-    client = _client(handler, timeout_seconds=1.0)
+    transport = httpx.MockTransport(handler)  # type: ignore[arg-type]
+    http = httpx.AsyncClient(transport=transport, base_url="https://overpass.test")
+    client = HttpOverpassClient(
+        base_url="https://overpass.test/api/interpreter",
+        timeout_seconds=1.0,
+        max_response_bytes=10_000,
+        max_attempts=1,
+        retry_backoff_seconds=0.01,
+        client=http,
+    )
     try:
-        with pytest.raises(ToolTimeoutError, match="timed out"):
+        with pytest.raises(OverpassTimeoutError, match="timed out"):
             await client.run("query")
     finally:
         await client.aclose()

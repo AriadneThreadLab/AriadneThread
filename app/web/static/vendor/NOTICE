@@ -1,0 +1,6 @@
+@mapbox/mapbox-gl-rtl-text 0.2.3
+Source: https://cdn.jsdelivr.net/npm/@mapbox/mapbox-gl-rtl-text@0.2.3/mapbox-gl-rtl-text.js
+License: BSD-2-Clause (Mapbox)
+Used by Ariadne Thread / MapLibre GL JS 4.7.1 for Arabic-script shaping
+and bidirectional (Persian, Arabic, Hebrew, mixed Latin) map labels.
+Do not replace this file with an unpinned "latest" URL.

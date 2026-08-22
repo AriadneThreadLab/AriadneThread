@@ -15,6 +15,8 @@ def build_query_osm_tool(settings: Settings) -> QueryOsmTool:
         timeout_seconds=settings.overpass_timeout_seconds,
         max_response_bytes=settings.overpass_max_response_bytes,
         user_agent=settings.osm_wiki_user_agent,
+        max_attempts=settings.overpass_max_attempts,
+        retry_backoff_seconds=settings.overpass_retry_backoff_seconds,
     )
     return QueryOsmTool(
         client,

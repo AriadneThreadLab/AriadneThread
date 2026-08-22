@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from datetime import datetime, timezone
 
 import pytest
+from app.analytics.datasets import DatasetRegistry
 from app.core.errors import EmbeddingError, ToolExecutionError
 from app.osm.contracts import (
     OSM_ATTRIBUTION,
@@ -14,10 +15,23 @@ from app.osm.contracts import (
     OverpassResponse,
 )
 from app.osm.query_spec import OsmFeatureQuery, PointRadius, TagFilter
+from app.places.contracts import PlaceRegistry
 from app.rag.contracts import OSM_KNOWLEDGE_DOMAIN, RetrievedPassage
+from app.tools.context import AnalysisRunState, GroundingState, ToolContext
 from app.tools.factory import build_tool_registry
 from app.tools.query_osm import TOOL_NAME, QueryOsmTool
 from app.tools.search_osm_knowledge import SearchOsmKnowledgeArgs, SearchOsmKnowledgeTool
+
+
+def _ctx(message: str = "test 35.7 51.4") -> ToolContext:
+    return ToolContext(
+        datasets=DatasetRegistry(),
+        analysis=AnalysisRunState(),
+        user_message=message,
+        places=PlaceRegistry(),
+        grounding=GroundingState(),
+    )
+
 
 _PASSAGE = RetrievedPassage(
     content="leisure=park is used for public green areas intended for recreation.",
@@ -91,18 +105,22 @@ class FakeEncoder:
 async def test_knowledge_search_returns_passages_and_labels_them_as_documentation():
     retriever = FakeRetriever()
     tool = SearchOsmKnowledgeTool(retriever)
-    outcome = await tool.execute(SearchOsmKnowledgeArgs(query="tag for public park", top_k=3))
+    outcome = await tool.execute(
+        SearchOsmKnowledgeArgs(query="tag for public park", top_k=3), _ctx()
+    )
 
     assert retriever.seen == [("tag for public park", 3, OSM_KNOWLEDGE_DOMAIN)]
-    assert "not live map data" in outcome.observation
+    assert "osm_documentation" in outcome.observation
+    assert "TOOL DATA" in outcome.observation
     assert "Tag: leisure=park > Description" in outcome.observation
+    assert "query_osm" in outcome.observation
     assert outcome.payload.passage_count == 1
     assert outcome.payload.domain == OSM_KNOWLEDGE_DOMAIN
 
 
 async def test_empty_knowledge_search_tells_the_model_not_to_guess():
     tool = SearchOsmKnowledgeTool(FakeRetriever(passages=[]))
-    outcome = await tool.execute(SearchOsmKnowledgeArgs(query="unknown concept"))
+    outcome = await tool.execute(SearchOsmKnowledgeArgs(query="unknown concept"), _ctx())
     assert "Do not guess tags" in outcome.observation
     assert outcome.payload.passages == []
 
@@ -110,7 +128,7 @@ async def test_empty_knowledge_search_tells_the_model_not_to_guess():
 async def test_retrieval_failure_becomes_a_tool_execution_error():
     tool = SearchOsmKnowledgeTool(FailingRetriever())
     with pytest.raises(ToolExecutionError, match="knowledge search unavailable"):
-        await tool.execute(SearchOsmKnowledgeArgs(query="park"))
+        await tool.execute(SearchOsmKnowledgeArgs(query="park"), _ctx())
 
 
 def test_knowledge_tool_schema_bounds_top_k():
@@ -132,7 +150,7 @@ async def test_query_osm_builds_the_query_and_returns_geojson():
     )
     tool = _query_tool(client)
     outcome = await tool.execute(
-        OsmFeatureQuery(place="Berlin", tags=[TagFilter(key="leisure", value="park")])
+        OsmFeatureQuery(place="Berlin", tags=[TagFilter(key="leisure", value="park")]), _ctx()
     )
 
     assert client.queries[0].startswith("[out:json][timeout:30];")
@@ -143,6 +161,7 @@ async def test_query_osm_builds_the_query_and_returns_geojson():
     assert outcome.payload.source.attribution == OSM_ATTRIBUTION
     assert "2 feature(s) returned" in outcome.observation
     assert "leisure=park in Berlin" in outcome.observation
+    assert "dataset_ref=osm_result_1" in outcome.observation
 
 
 async def test_query_osm_reports_an_empty_result_instead_of_inviting_invention():
@@ -151,7 +170,8 @@ async def test_query_osm_reports_an_empty_result_instead_of_inviting_invention()
         OsmFeatureQuery(
             point=PointRadius(lat=52.5219, lon=13.4132, radius_m=2000),
             tags=[TagFilter(key="amenity", value="pharmacy")],
-        )
+        ),
+        _ctx(),
     )
     assert outcome.payload.feature_count == 0
     assert "Do not invent results" in outcome.observation
@@ -162,7 +182,8 @@ async def test_query_osm_clamps_the_limit_to_the_configured_maximum():
     client = FakeOverpassClient()
     tool = _query_tool(client, max_results=100)
     await tool.execute(
-        OsmFeatureQuery(place="Berlin", tags=[TagFilter(key="leisure", value="park")], limit=1000)
+        OsmFeatureQuery(place="Berlin", tags=[TagFilter(key="leisure", value="park")], limit=1000),
+        _ctx(),
     )
     assert client.queries[0].endswith("out geom 100;")
 
@@ -171,10 +192,23 @@ async def test_query_osm_surfaces_truncation():
     client = FakeOverpassClient(elements=({"type": "node", "id": 1},), truncated=True)
     tool = _query_tool(client)
     outcome = await tool.execute(
-        OsmFeatureQuery(place="Berlin", tags=[TagFilter(key="leisure", value="park")], limit=1)
+        OsmFeatureQuery(place="Berlin", tags=[TagFilter(key="leisure", value="park")], limit=1),
+        _ctx(),
     )
     assert outcome.payload.truncated
     assert "truncated" in outcome.observation
+
+
+async def test_query_osm_marks_limit_equality_as_truncated():
+    client = FakeOverpassClient(elements=({"type": "node", "id": 1},), truncated=False)
+    tool = _query_tool(client)
+    outcome = await tool.execute(
+        OsmFeatureQuery(place="Berlin", tags=[TagFilter(key="leisure", value="park")], limit=1),
+        _ctx(),
+    )
+    assert outcome.payload.feature_count == 1
+    assert outcome.payload.truncated
+    assert any("limit" in warning for warning in outcome.payload.warnings)
 
 
 def test_query_osm_arguments_are_the_validated_query_spec():
@@ -200,7 +234,7 @@ async def test_query_osm_observation_excludes_full_geojson():
     )
     tool = _query_tool(client)
     outcome = await tool.execute(
-        OsmFeatureQuery(place="Berlin", tags=[TagFilter(key="amenity", value="bench")])
+        OsmFeatureQuery(place="Berlin", tags=[TagFilter(key="amenity", value="bench")]), _ctx()
     )
 
     assert outcome.payload.geojson["type"] == "FeatureCollection"

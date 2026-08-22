@@ -6,12 +6,11 @@ before making structural changes.
 
 ## Repository boundary
 
-- This repository is `/home/rasoul/projects/osm-geoagent`. Never modify another
-  repository, in particular `/home/rasoul/projects/legal-ai-platform`, and never
-  import from it.
-- Shared *infrastructure* (the PostgreSQL server, the Ollama service, the GPU)
-  is reused. Everything else is separate: virtualenv `.venv`, database
-  `osm_geoagent`, migrations, configuration, tables.
+- Work only inside this repository. Do not import from or modify other local
+  projects.
+- Shared *infrastructure* (PostgreSQL, Ollama, a GPU) may be reused. Everything
+  else is separate: virtualenv `.venv`, database `osm_geoagent`, migrations,
+  configuration, tables.
 
 ## Environment
 
@@ -19,7 +18,7 @@ before making structural changes.
   3.10 rejects. Use `from __future__ import annotations`.
 - Use `./.venv/bin/python`, `./.venv/bin/pytest`, etc. Do not install packages
   globally.
-- PostgreSQL 17 listens on `127.0.0.1:5433`. Ollama on `127.0.0.1:11434`.
+- PostgreSQL 17 and Ollama are reached at the hosts/ports in `.env`.
 - Never `ollama pull`, delete, upgrade or replace a model. Discover what is
   installed with `ollama list` and use that tag.
 - Never download `BAAI/bge-m3` implicitly; it is already cached under
@@ -43,8 +42,17 @@ before making structural changes.
    provider boundary and must never be traced, returned, logged or persisted.
 6. **Bounded loops.** Every agent run respects `AGENT_MAX_TOOL_ROUNDS` and
    `AGENT_MAX_TOOL_CALLS`; every outbound call has an explicit timeout.
+   HTTP agent requests also respect `AGENT_REQUEST_TIMEOUT_SECONDS`.
 7. **Corpus is a whitelist.** Ingest only the pages in `app/rag/corpus.py`.
    No crawler, no link following.
+8. **No committed password defaults.** `DATABASE_URL` comes from `.env` /
+   the environment. `.env.example` uses placeholders only.
+9. **The runtime never trains.** `app/active_learning` selects and exports; it
+   must not start training, touch weights or promote a model. `finetuning/` is a
+   separate package with its own dependencies: `app` never imports it, it never
+   imports `app`, and the two meet only at a versioned dataset file.
+10. **Only reviewed data becomes training data.** A candidate is exportable only
+   with `approved_for_training` plus a validated success or a human correction.
 
 ## Code conventions
 

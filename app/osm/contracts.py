@@ -29,6 +29,7 @@ class OverpassResponse:
     response_bytes: int
     truncated: bool = False
     warnings: tuple[str, ...] = field(default_factory=tuple)
+    attempts: int = 1
 
 
 @dataclass(frozen=True, slots=True)

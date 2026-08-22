@@ -71,6 +71,84 @@ class LLMProtocolError(LLMError):
     code = "llm_protocol_error"
 
 
+class LLMToolProtocolError(LLMProtocolError):
+    """The model's prompted/native tool-call envelope was invalid."""
+
+    code = "llm_tool_protocol_error"
+
+
+class OllamaUnreachableError(LLMError):
+    """The Ollama HTTP endpoint could not be reached."""
+
+    code = "ollama_unreachable"
+
+
+class OllamaModelNotFoundError(LLMError):
+    """The configured Ollama model tag is not installed."""
+
+    code = "ollama_model_not_found"
+
+
+class OllamaBadRequestError(LLMError):
+    """Ollama rejected the chat request (HTTP 400)."""
+
+    code = "ollama_bad_request"
+
+
+class OllamaProtocolError(LLMProtocolError):
+    """Ollama returned a response that violates the expected chat protocol."""
+
+    code = "ollama_protocol_error"
+
+
+class OllamaInvalidResponseError(LLMProtocolError):
+    """Ollama returned a body that could not be interpreted as a chat reply."""
+
+    code = "ollama_invalid_response"
+
+
+class AvalAIError(LLMError):
+    """AvalAI / OpenAI-compatible provider failed."""
+
+    code = "avalai_error"
+
+
+class AvalAIAuthenticationError(AvalAIError):
+    """AvalAI rejected the API key (HTTP 401/403)."""
+
+    code = "avalai_authentication_error"
+
+
+class AvalAIBillingError(AvalAIError):
+    """AvalAI rejected the request for credit / quota reasons."""
+
+    code = "avalai_billing_error"
+
+
+class AvalAIRateLimitError(AvalAIError):
+    """AvalAI rate-limited the request (HTTP 429)."""
+
+    code = "avalai_rate_limited"
+
+
+class AvalAIUnavailableError(AvalAIError):
+    """AvalAI could not be reached or returned a server error."""
+
+    code = "avalai_unavailable"
+
+
+class AvalAIInvalidModelError(AvalAIError):
+    """The configured AvalAI model id is not available on the route."""
+
+    code = "avalai_invalid_model"
+
+
+class AvalAIInvalidResponseError(LLMProtocolError):
+    """AvalAI returned a body that could not be interpreted as a chat reply."""
+
+    code = "avalai_invalid_response"
+
+
 class EmbeddingError(GeoAgentError):
     """The embedding provider failed or is unavailable."""
 
@@ -82,11 +160,64 @@ class OverpassError(ToolExecutionError):
 
     code = "overpass_error"
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        upstream_status: int | None = None,
+        attempts: int = 1,
+    ) -> None:
+        super().__init__(message)
+        self.upstream_status = upstream_status
+        self.attempts = attempts
+
+
+class OverpassTimeoutError(OverpassError):
+    """Overpass timed out (HTTP 504 or client read timeout)."""
+
+    code = "overpass_timeout"
+
+
+class OverpassRateLimitedError(OverpassError):
+    """Overpass rate-limited the request (HTTP 429)."""
+
+    code = "overpass_rate_limited"
+
+
+class OverpassBadResponseError(OverpassError):
+    """Overpass returned an unusable body (empty, HTML, malformed JSON)."""
+
+    code = "overpass_bad_response"
+
+
+class OverpassUpstreamError(OverpassError):
+    """Overpass returned a retryable/non-timeout upstream failure (e.g. 502/503)."""
+
+    code = "overpass_upstream_error"
+
 
 class OverpassQueryBuildError(GeoAgentError):
     """A validated request could not be turned into a supported Overpass query."""
 
     code = "overpass_query_build_error"
+
+
+class PlaceResolutionError(ToolExecutionError):
+    """Trusted place resolution failed."""
+
+    code = "place_resolution_error"
+
+
+class PlaceAmbiguousError(PlaceResolutionError):
+    """Place resolution returned multiple incompatible candidates."""
+
+    code = "place_ambiguous"
+
+
+class ToolNotEligibleError(ToolError):
+    """The model requested a tool that is registered but not currently eligible."""
+
+    code = "tool_not_eligible"
 
 
 class IngestionError(GeoAgentError):
@@ -111,3 +242,39 @@ class CorpusWhitelistError(IngestionError):
     """Attempted to ingest a source that is not on the whitelist."""
 
     code = "corpus_whitelist_error"
+
+
+class AgentRequestTimeoutError(GeoAgentError):
+    """The bounded total agent HTTP request timeout was exceeded."""
+
+    code = "agent_request_timeout"
+
+
+class DependencyUnavailableError(GeoAgentError):
+    """A required runtime dependency failed a readiness or execution check."""
+
+    code = "dependency_unavailable"
+
+
+class ActiveLearningError(GeoAgentError):
+    """Base class for active-learning selection, review and export failures."""
+
+    code = "active_learning_error"
+
+
+class SanitizationError(ActiveLearningError):
+    """Text or payload contained content that must never be retained."""
+
+    code = "active_learning_sanitization_error"
+
+
+class ReviewTransitionError(ActiveLearningError):
+    """A review lifecycle transition is not permitted for this candidate."""
+
+    code = "active_learning_review_transition_error"
+
+
+class DatasetExportError(ActiveLearningError):
+    """A curated dataset could not be exported."""
+
+    code = "active_learning_dataset_export_error"

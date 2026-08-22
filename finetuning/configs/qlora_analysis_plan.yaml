@@ -1,0 +1,51 @@
+# QLoRA supervised fine-tuning: user request -> Ariadne AnalysisPlan.
+#
+# Every value below can be overridden from the environment (BASE_MODEL_ID,
+# LORA_R, MAX_SEQ_LENGTH, ...); see ariadne_finetuning.config.ENV_OVERRIDES.
+#
+# The base model is a placeholder, not a recommendation. Pick a small
+# open-weight instruct model that fits the GPU you actually have.
+
+experiment_id: analysis-plan-qlora-001
+base_model_id: Qwen/Qwen2.5-1.5B-Instruct
+task: analysis_plan
+dataset_dir: data
+dataset_version: v1
+output_dir: artifacts
+
+lora:
+  r: 16
+  alpha: 32
+  dropout: 0.05
+  # Attention projections only: cheap, and enough for structured-output shaping.
+  target_modules:
+    - q_proj
+    - k_proj
+    - v_proj
+    - o_proj
+  bias: none
+  task_type: CAUSAL_LM
+
+quantization:
+  load_in_4bit: true
+  quant_type: nf4
+  double_quant: true
+  compute_dtype: bfloat16
+
+training:
+  learning_rate: 0.0002
+  num_epochs: 3.0
+  # Batch size 1 with accumulation is the conservative choice for a
+  # Colab-class card. Raise it only after measuring memory on your GPU.
+  train_batch_size: 1
+  eval_batch_size: 1
+  gradient_accumulation_steps: 8
+  max_seq_length: 1024
+  warmup_ratio: 0.03
+  weight_decay: 0.0
+  logging_steps: 10
+  gradient_checkpointing: true
+  optim: paged_adamw_8bit
+  lr_scheduler_type: cosine
+  seed: 20260816
+  max_new_tokens: 512

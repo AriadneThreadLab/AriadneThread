@@ -1,241 +1,356 @@
-# OSM GeoAgent - Architecture
+# Ariadne Thread — Architecture
 
 **Knowledge-Grounded Planner-Executor GeoAgent with Tool Orchestration**
-(agentic tool orchestration with a bounded tool loop)
 
-The system turns a natural-language GIS request into a small number of
-*controlled* OpenStreetMap operations, and returns an answer that can be
-verified: the tags it used, the passages it read, the Overpass query it ran,
-the features it received, and the order in which all of that happened.
+Implemented MVP architecture (not a future plan). The system turns a
+natural-language GIS request into a small number of *controlled* OpenStreetMap
+operations and returns a verifiable answer: tags used, documentation passages,
+generated Overpass QL, live features, warnings, and an operational trace.
 
-## 1. Request flow
+## Component diagram
+
+```mermaid
+flowchart LR
+  UI["GET / English UI"] --> API["POST /api/v1/agent/query"]
+  API --> Agent["PlannerExecutorAgent"]
+  Agent --> LLM["LLMProvider (Ollama or AvalAI)"]
+  Agent --> Reg["ToolRegistry"]
+  Reg --> RAG["search_osm_knowledge"]
+  Reg --> RP["resolve_place"]
+  Reg --> OSM["query_osm"]
+  Reg --> AN["analyze_features"]
+  RAG --> PG["PostgreSQL + pgvector"]
+  RAG --> BGE["BGE-M3 lazy"]
+  RP --> NOM["Nominatim HTTP"]
+  OSM --> Builder["build_overpass_query"]
+  Builder --> OP["Overpass HTTP client"]
+  OSM --> GJ["GeoJSON encoder"]
+  AN --> Engine["SpatialAnalyticsEngine"]
+  Agent --> Acc["ResultAccumulator + PlaceRegistry + DatasetRegistry"]
+  Acc --> API
+
+  API --> UI
+  API -.->|"completed run, best effort"| AL["ActiveLearningService"]
+  AL --> ALDB["active_learning_* tables"]
+  ALDB -.->|"CLI export, offline"| DS["dataset_vN.jsonl"]
+  DS -.->|"separate process"| FT["finetuning/ QLoRA pipeline"]
+```
+
+Dotted edges are offline or best-effort: nothing on them can slow down, block or
+fail a request, and no runtime path leads back from `finetuning/` into the
+service.
+
+## Request lifecycle
 
 ```
-User
+User (UI or curl)
  ↓
-FastAPI endpoint
+validated AgentQueryRequest { message }
  ↓
-GeoAgent orchestrator
+asyncio.wait_for(agent.run, AGENT_REQUEST_TIMEOUT_SECONDS)
  ↓
-Planner (LLM) - does this need OSM documentation? which tags? which area?
+Ollama turn (prompted JSON tool protocol by default)
  ↓
-Tool Registry - validate the requested tool and its arguments
+Tool Registry validates name + Pydantic args
  ↓
-Tool execution - search_osm_knowledge and/or query_osm
+search_osm_knowledge and/or resolve_place and/or query_osm
+and/or analyze_features (state-aware model-facing eligibility)
  ↓
-Structured observation appended to the conversation
+compact observation → model (never full GeoJSON)
+structured payload → ResultAccumulator
+(request-scoped place_ref + dataset_ref)
  ↓
-Re-plan (bounded) or finish
+final_answer or budget stop
  ↓
-Answer + sources + execution trace + GeoJSON
+AgentQueryResponse (+ optional analysis) → HTTP JSON / UI render
 ```
 
-Planning and execution are not separate services: the planner is the model
-turn that emits tool calls, and the executor is the registry turn that runs
-them. What makes it a planner-executor loop is that the model never touches an
-external system directly - it can only propose a *validated* tool call.
+Opening `GET /` does **not** touch PostgreSQL, Ollama, Overpass, or BGE-M3.
 
-## 2. The central distinction: documentation vs. live data
+## Composition root and lifecycle
 
-These two capabilities answer different questions and must never be conflated.
+`app/bootstrap.py` builds:
+
+settings → Database → embedding provider → retriever → Overpass tool →
+resolve_place tool → analyze_features tool → LLM provider (Ollama or AvalAI) →
+Tool Registry → PlannerExecutorAgent
+
+`app/main.py` lifespan attaches these to `app.state` and closes them on shutdown.
+Nothing at import time opens pools, loads models, or dials the network.
+
+## Provider boundaries
+
+| Concern | Contract | Implementation |
+|---|---|---|
+| LLM | `LLMProvider` | `OllamaProvider` or `AvalAIProvider` (`LLM_PROVIDER`) |
+| Embeddings | `EmbeddingProvider` | `BgeM3EmbeddingProvider` (lazy, `local_files_only`) |
+| Retrieval | `KnowledgeRetriever` | session-bound pgvector retriever |
+| Overpass | `OverpassClient` | `HttpOverpassClient` |
+| Places | `PlaceResolver` | `NominatimPlaceResolver` |
+| Tools | `Tool` + registry | `search_osm_knowledge`, `resolve_place`, `query_osm`, `analyze_features` |
+
+### Prompted vs native tools
+
+`LLM_PROVIDER` selects the chat backend (`ollama` default, or `avalai`).
+
+For **Ollama**, `OLLAMA_TOOL_MODE` selects the protocol explicitly (`prompted`
+default, or `native`). Advertised Ollama `tools` capability means the HTTP API
+may accept a tools payload; it does **not** prove reliable native tool-call
+emission for `deepseek-r1:7b`. **Prompted** planning requests set Ollama
+`format: "json"` so the model emits syntactic JSON.
+
+For **AvalAI** (OpenAI-compatible, default model `gemini-3.6-flash`), native
+tool calling is preferred. Eligible Tool Registry schemas are converted to
+OpenAI `tools` on each turn. If the route rejects a `tools` payload, the
+provider falls back **explicitly** and logs `tool_mode=prompted_fallback`.
+Accepting a `tools` field is not treated as proof of native emission; the
+`diagnose-avalai` command checks that `tool_calls` are actually returned.
+
+That does **not** replace Ariadne protocol validation: prompted replies must
+still be exactly one of `{"tool_calls":[…]}` or `{"final_answer":"…"}`, and
+native `tool_calls` still go through Tool Registry / Pydantic. At most one
+complete outer Markdown fence may wrap a prompted object (legacy). Prose
+before/after JSON, tool names as top-level keys, and mixed envelopes are
+`llm_protocol_error`. Invalid tool arguments become structured
+`tool_argument_error` observations for bounded correction (not an immediate
+agent stop). Model-facing RAG observations are compact top-N grounding; the
+API/UI may still show a broader citation list. `analyze_features` is omitted
+from the model-facing catalogue until live datasets exist *and* analytical
+intent is detected; the registry still registers it. Calls to ineligible tools
+are rejected as `tool_not_eligible`. Dependent tools may only execute after
+their required backend-generated references exist (`place_ref`, `dataset_ref`).
+Hidden Ollama `thinking` / `<think>` content (and any AvalAI reasoning fields)
+is discarded at the provider boundary. Ollama is not required when
+`LLM_PROVIDER=avalai`.
+
+## Multi-target landmark comparison
+
+Equal-radius comparisons around named landmarks do **not** widen `query_osm`
+into a multi-target tool. The flow is:
+
+1. Ground the feature concept (`search_osm_knowledge` → e.g. `leisure=park`).
+2. Resolve each landmark with `resolve_place` → request-scoped `place_N`.
+3. Build identical analysis radii from the **user** distance (e.g. 2000 m).
+4. Call `query_osm` once per target with `place_ref_scope` (never a `place` list;
+   never model-invented lat/lon).
+5. Register each live result as `osm_result_N`.
+6. Run `analyze_features` for deterministic metrics / comparison.
+7. Combine FeatureCollections for map/download with application-level
+   `analysis_target` / `analysis_target_label` / `target_index` (OSM tags
+   untouched). Each target keeps its own copies so the map can colour by
+   target. A feature that falls in both radii is duplicated once per target.
+   Green-space comparisons query a union of tags (`leisure=park`,
+   `landuse=grass`, `landuse=recreation_ground`, `natural=wood`,
+   `natural=grassland`) via `tag_match=any`. Parks-only requests stay
+   `leisure=park`.
+
+**LLM must never invent landmark coordinates.** Trusted coordinates come only
+from user-supplied numbers or `resolve_place`.
+
+`<think>…</think>` is stripped in `app/llm/tool_protocol.py` before the
+orchestrator, trace, API, UI, or logs see the reply.
+
+## Tool Registry
+
+The registry is the **only** execution path. The orchestrator never calls the
+retriever, Overpass client, query builder, or database directly. Unknown tools
+and invalid arguments become structured tool errors the model may observe while
+budget remains.
+
+## Documentation vs live data
 
 | | `search_osm_knowledge` | `query_osm` |
 |---|---|---|
-| Source | Local OSM documentation corpus (OSM wiki text) | Overpass API |
-| Answers | Which tags model a concept, what `natural=wood` means, Overpass concepts | Which features actually exist right now |
-| Freshness | Snapshot, taken at ingestion time | Live |
-| Output | Passages with title, section, URL, score | Features, GeoJSON, count, generated query |
+| Source | Local OSM Wiki corpus | Overpass API |
+| Output | Passages + scores | Features + GeoJSON + generated QL |
+| May fill `geojson` | No | Yes |
 
-Three rules are enforced in the prompt, in the tool observations, and in the
-response shape:
-
-1. Documentation is never presented as live map data. Every knowledge
-   observation says so explicitly.
-2. Live results are never invented. An empty Overpass result is reported as
-   empty, with an instruction not to fabricate.
-3. `geojson` in the response is populated **only** by `query_osm`.
-
-The typical grounded run for "Find public parks in Berlin" is therefore:
-search the documentation to learn that a public park is `leisure=park`, then
-query Overpass for `leisure=park` in Berlin, then answer citing both.
-
-## 3. Safe Overpass design
-
-Model-authored Overpass QL is never executed. Instead:
+## Safe Overpass path
 
 ```
-Natural language
- ↓
-LLM structured tool arguments (JSON)
- ↓
-Pydantic validation (OsmFeatureQuery)
- ↓
-Deterministic Overpass query builder
- ↓
-Overpass API
+LLM JSON args → spatial-trust check
+ (named place | user-supplied coords | trusted place_ref_scope)
+ → OsmFeatureQuery (extra=forbid; limit ≤ MAX_LIMIT; one scope)
+ → place_ref_scope → PointRadius via PlaceRegistry (server-side)
+ → build_overpass_query (pure, deterministic)
+ → configured OVERPASS_BASE_URL only
+ → bounded client retry on 502/503/504 (max 2 attempts; model never controls retries)
+ → validated JSON → GeoJSON FeatureCollection
 ```
 
-`OsmFeatureQuery` (`app/osm/query_spec.py`) is the security boundary:
+No `raw_query` / `overpass_ql` escape hatch. Unsafe literals are rejected, not
+escaped. Timeout, max results, and max response bytes are application-controlled.
+Invented bbox/point coordinates are rejected unless those numbers appear in the
+user message. Landmark radii use `place_ref_scope` after `resolve_place`.
+City requests should use named-place scope. Place strings such as
+`Tehran, Iran` resolve the Overpass area on the primary toponym (`Tehran`) via
+`name` / `name:en`. The `out … N` clause and a post-normalization feature cap
+both enforce the validated effective limit.
 
-- exactly one spatial scope: `place`, `point` (lat/lon/radius) or `bbox`;
-- one to eight tag conditions, keys matched against an OSM-key pattern;
-- values containing `"`, `\` or newlines are **rejected**, not escaped, so no
-  value can alter the structure of the generated query;
-- `limit` and `radius_m` are bounded in the schema and clamped again against
-  `OVERPASS_MAX_RESULTS` at execution time;
-- `extra="forbid"`, so a hallucinated `overpass_ql` field is a validation error
-  rather than a silently ignored one.
-
-The builder (`app/osm/query_builder.py`) is pure and deterministic: identical
-input always produces an identical query string, which is returned to the user
-as provenance.
-
-The supported subset is `[out:json]` + optional `area[name=...]` + node/way/
-relation statements with tag selectors and one spatial filter + `out geom|center
-<limit>`. Modelling more of Overpass is explicitly out of scope.
-
-The HTTP client (`app/osm/client.py`) posts that query to the configured
-`OVERPASS_BASE_URL` only. Connect/read timeouts, `OVERPASS_MAX_RESPONSE_BYTES`,
-HTTP 429/4xx/5xx, malformed JSON and Overpass error remarks are mapped to
-structured tool errors. Empty `elements` is a valid success.
-
-GeoJSON normalisation (`app/osm/geojson.py`) produces a
-`FeatureCollection`. Nodes become Points; ways use `geometry` (LineString or
-closed Polygon) or `center` (Point). Relations without reliable geometry are
-skipped with an explicit warning - geometry is never invented. Properties keep
-`osm_type`, `osm_id`, `tags` and OSM attribution.
-
-`query_osm` returns two layers of result:
-
-1. a compact observation for the model (status, feature count, source type,
-   warning count, query summary; never the full GeoJSON);
-2. a structured payload for the API/UI (GeoJSON, generated Overpass QL,
-   warnings, attribution).
-
-## 4. Bounded tool loop
-
-Implemented by `PlannerExecutorAgent` (`app/agent/orchestrator.py`):
-
-1. Send the conversation and the tool definitions to the model.
-2. Receive zero or more tool calls (prompted JSON protocol by default).
-3. Validate each call against the registry (tool exists, arguments match).
-4. Execute only registered tools.
-5. Append a compact structured observation per call (never full GeoJSON).
-6. Accumulate structured payloads (`ResultAccumulator`) for the API/UI.
-7. Call the model again.
-8. Stop on a final answer, or when a limit is reached.
-
-Limits (`app/agent/loop.py`) are `AGENT_MAX_TOOL_ROUNDS` and
-`AGENT_MAX_TOOL_CALLS`; per-request network timeouts and response size caps
-apply on top. Tool failures are *not* exceptions to the loop - they become
-structured observations (`tool_not_registered`, `tool_argument_error`,
-`tool_timeout`, ...) so the model can correct itself within the budget.
-
-The production HTTP endpoint is deferred; developers can run one request with
-`python -m app.cli agent-query --message "..."`.
-
-## 5. Traceability and hidden reasoning
-
-The trace contains operational events only: `request_received`, `llm_turn`,
-`tool_call`, `tool_result`, `tool_error`, `final_answer`, `stopped`.
-
-The installed model emits `<think>...</think>` reasoning. It is stripped at the
-provider boundary (`app/llm/tool_protocol.py`) before anything else sees the
-reply, and is never traced, returned or persisted.
-
-## 6. Provider boundaries
-
-**LLM.** Domain code depends only on `ChatMessage`, `ToolDefinition`,
-`ToolCall`, `LLMResponse` and the `LLMProvider` protocol. `OllamaProvider` is
-the only module that knows Ollama's HTTP shape.
-
-`/api/tags` for the configured model reports `completion` and `thinking`
-without advertising `tools` (prompted mode is therefore the safe default). The
-provider supports two tool-calling modes that share the same tool contracts:
-
-- `prompted` (default): tool schemas are rendered into the system prompt and
-  the model replies with `{"tool_calls": [...]}` or `{"final_answer": "..."}`;
-- `native`: Ollama's `tools` field, for models that support it.
-
-Switching modes, or adding an OpenAI-compatible cloud provider later, requires
-no change to any tool or to the agent.
-
-**Embeddings.** `EmbeddingProvider` / `BgeM3EmbeddingProvider`
-(`BAAI/bge-m3`, 1024-dim, multilingual - this is what makes a Persian question
-retrieve English OSM documentation). The model is loaded lazily behind a lock
-on first use from the local Hugging Face cache only (`local_files_only`);
-importing the module pulls in neither torch nor the network, and
-`sentence-transformers` is an optional install extra. Indexing is
-`python -m app.cli index-osm-knowledge`. Retrieval uses pgvector cosine
-distance converted to cosine *similarity* (`score = 1 - distance`; higher is
-better), always filtered to `osm_knowledge`, and is exposed as the registered
-tool `search_osm_knowledge`.
-
-## 7. Persistence
-
-A dedicated database (`osm_geoagent`) on the existing PostgreSQL 17 server,
-reached through `DATABASE_URL` with `postgresql+asyncpg`. No other project's
-database or tables are touched.
-
-Tables (see `app/db/models.py`, migration `20260801_0001`):
-
-- `knowledge_documents` - `id`, `domain` (`osm_knowledge`), `title`,
-  `source_url`, `source_type`, `license`, `retrieved_at`, `content_hash`,
-  `created_at`, `updated_at`. Identity for idempotent ingestion is
-  `UNIQUE(domain, source_url)`.
-- `knowledge_chunks` - `id`, `document_id`, `section`, `content`,
-  `chunk_index`, `content_hash`, `embedding VECTOR(1024)` (nullable until
-  indexing), `created_at`, `updated_at`. Position uniqueness is
-  `UNIQUE(document_id, chunk_index)` so a refresh can replace orphans cleanly.
-
-The migration enables `postgis` and `vector` with `CREATE EXTENSION IF NOT
-EXISTS`. No spatial feature tables are created in the MVP: live GeoJSON remains
-request-scoped. No model reasoning is stored.
-
-Migrations are Alembic, run through the same async driver as the application;
-`alembic/env.py` reads the URL from settings so no credential lives in a
-committed file.
-
-## 8. Knowledge corpus
-
-An explicit whitelist of eight OSM wiki pages (`app/rag/corpus.py`): Map
-Features, Tag, `leisure=park`, `landuse=grass`, `natural=wood`,
-`landuse=forest`, Overpass QL, Overpass API by Example. There is no crawler and
-no link following - `is_allowed_source()` gates ingestion, and extending the
-corpus is a deliberate code change. The domain is `osm_knowledge`; these are
-*OSM documentation* and *OSM tagging conventions*.
-
-Ingestion (`python -m app.cli ingest-osm-knowledge`) uses the MediaWiki API
-only, with a descriptive User-Agent, explicit timeouts and bounded retries.
-Articles are normalised from wikitext, split by headings, hashed, and upserted
-by `(domain, source_url)`. Changed documents replace all chunks so superseded
-passages are not left searchable. Embeddings are written by
-`python -m app.cli index-osm-knowledge`.
-
-## 9. Module map
+## Trusted place resolution
 
 ```
-app/
-  api/          FastAPI routes and dependencies (health)
-  agent/        contracts, loop bounds, accumulator, orchestrator, prompt
-  core/         settings, logging, error hierarchy
-  db/           declarative base, async engine and session lifecycle
-  embeddings/   EmbeddingProvider protocol, lazy BGE-M3 provider
-  llm/          provider-neutral chat contracts, Ollama provider, tool protocol
-  osm/          query spec, builder, Overpass client, GeoJSON encoder
-  rag/          retrieval contracts, whitelist, MediaWiki ingest, chunking
-  tools/        Tool protocol, registry, search_osm_knowledge, query_osm
-  cli.py        ingest/index/search + developer `agent-query`
+resolve_place({query, limit?})
+ → configured NOMINATIM_BASE_URL only (model never supplies URLs)
+ → ranked hits → deterministic Tehran-context / ambiguity checks
+ → PlaceRegistry place_N {lat, lon, label, source, source_id}
+ → compact observation for the LLM
 ```
 
-Dependency direction is inward: `api` → `agent` → `tools` → (`rag`, `osm`) →
-(`llm`, `embeddings`, `db`) → `core`. Nothing in `tools`, `rag` or `osm`
-imports FastAPI or Ollama types.
+Coordinate provenance is recorded in the execution trace. Grounded OSM tags
+from documentation are locked for subsequent `query_osm` calls in the request
+so silent substitutions such as `amenity=public_park` are rejected.
 
-## 10. Deliberate non-choices
+Transient Overpass failures are classified as `overpass_timeout`,
+`overpass_rate_limited`, `overpass_upstream_error`, or `overpass_bad_response`.
+Raw HTML gateway bodies are never returned to the model, UI, or public errors.
+A failed live query does **not** invalidate successful documentation grounding
+(`leisure=park` remains valid after HTTP 504). The model receives a compact
+`tool_error` observation instructing it not to invent alternate tags or
+coordinates. Empty `FeatureCollection` results remain distinct from timeouts.
 
-No second vector database (pgvector only), no Qdrant/Pinecone/Milvus/
-Elasticsearch, no Kafka/Celery/Kubernetes, no MCP, no workflow engine, no
-microservices, and no LangChain/LangGraph: the loop is roughly a hundred lines
-of explicit, testable control flow, and a framework would obscure exactly the
-part that needs to be auditable.
+## GeoJSON separation
+
+`query_osm` returns:
+
+1. compact observation for the LLM (counts, status, warnings; no FeatureCollection)
+2. structured payload for API/UI (full GeoJSON + provenance)
+
+`ResultAccumulator` merges multi-target live results into one downloadable
+FeatureCollection for the response; it is not re-injected into chat turns.
+Analysis buffers and university reference points are not counted as park
+features.
+
+## API flow
+
+- Canonical endpoint: `POST /api/v1/agent/query`
+- Request: `{ "message": "…" }` (an optional conversation identifier may be
+  supplied so follow-up questions stay in the same session)
+- Response: answer, `knowledge_sources`, `execution_trace`, `overpass_query`,
+  `geojson`, warnings/errors, `stop_reason`, attribution, `request_id`,
+  optional structured provenance
+- Errors: 422 validation, 429 rate limit, 503 dependency, 504 timeout, 500 sanitized
+- Correlation: `X-Request-ID` middleware
+
+## UI flow
+
+English GeoAI console at `GET /` (same origin). Layout: left analysis panel +
+right MapLibre map (`ariadne-results` source, optional `ariadne-analysis-area`).
+The backend FeatureCollection is the map/download source of truth. Browser-local
+GeoJSON download uses `application/geo+json`. Analysis Workflow renders
+`execution_trace` operational events only, plus one clearly marked client-side
+“Rendered GeoJSON on the map” event. Documentation sources, live summary,
+warnings/errors, GeoJSON preview, and read-only Overpass provenance are separate.
+
+## Timeout boundaries
+
+| Budget | Setting |
+|---|---|
+| Whole HTTP agent request | `AGENT_REQUEST_TIMEOUT_SECONDS` |
+| Each Ollama call | `OLLAMA_REQUEST_TIMEOUT_SECONDS` |
+| Overpass HTTP | `OVERPASS_TIMEOUT_SECONDS` |
+| Readiness probes | `READY_CHECK_TIMEOUT_SECONDS` |
+| Loop structure | `AGENT_MAX_TOOL_ROUNDS` / `AGENT_MAX_TOOL_CALLS` |
+
+## Persistence
+
+Dedicated DB `osm_geoagent`:
+
+- `knowledge_documents` unique on `(domain, source_url)`
+- `knowledge_chunks` unique on `(document_id, chunk_index)`, `VECTOR(1024)`
+- `active_learning_candidates` one row per retained run (no GeoJSON, no prompts)
+- `active_learning_reviews` append-only audit of human review decisions
+- `training_dataset_exports` dataset lineage (version, candidate ids, digest)
+- Live GeoJSON is request-scoped (not persisted)
+- No model reasoning is stored
+
+Corpus whitelist: `app/rag/corpus.py` (eight OSM Wiki pages). No crawler.
+
+## Operational trace
+
+Events only: `request_received`, `llm_turn`, `tool_call`, `tool_result`,
+`tool_error`, `final_answer`, `stopped`. Optional safe `details` may include
+scope type, named place, radius, validated tags, effective limit, feature count,
+duration, and status/error codes. No hidden reasoning, prompts, GeoJSON dumps,
+or credentials.
+
+## Security boundaries
+
+- No shell / eval / exec / model SQL
+- No arbitrary URL proxy
+- No custom Overpass endpoint from the model
+- UI escapes text; validates http(s) source links; CSP on the UI route
+- Logs: correlation ID, route, duration, stop reason, tool-call count,
+  feature count, safe error codes — not secrets or full payloads
+
+## Spatial analytics and analytical traceability
+
+Implemented in `app/analytics/`. Governing rule:
+
+> LLM selects the analytical plan; deterministic code computes the metrics.
+> Traceability records structured decision provenance without exposing
+> chain-of-thought.
+
+| Artifact | Meaning |
+|---|---|
+| `AnalysisPlan` | What the model selected for analysis (validated tool args) |
+| `AnalysisDecisionTrace` | Why the metric/method was selected (rules, feasibility, re-plans) |
+| `CalculationProvenance` | How deterministic values were produced |
+| `AnalysisResult` | Computed source-of-truth numeric results |
+| `ComparisonReport` | Human-readable interpretation assembled after results exist |
+
+Flow:
+
+1. `query_osm` registers a request-scoped `dataset_ref` (`osm_result_N`).
+2. The model proposes an `AnalysisPlan` (closed metric catalog + rule IDs).
+3. `analyze_features` validates feasibility; at most one structured re-plan.
+4. `SpatialAnalyticsEngine` / `ComparisonEngine` compute numbers (stdlib geodesy).
+5. Optional `analysis` on `AgentQueryResponse`; UI shows Comparison Report and
+   Analysis Method only when present.
+
+Versions: `metric-catalog-1`, `metric-rules-1`. Initial metrics include count,
+density, sum/mean/median/stdev/min/max, ratio, area metrics, nearest-distance
+metrics, and coverage percentage. Sample standard deviation uses
+`statistics.stdev`.
+
+## Active learning and fine-tuning
+
+Full description: [active-learning-and-finetuning.md](active-learning-and-finetuning.md).
+
+`app/active_learning/` consumes finished runs and decides, deterministically,
+whether one is informative enough to keep for human review. It is a consumer of
+the operational trace, not a participant in the loop: the orchestrator is
+unaware of it, `observe_run` swallows its own failures, and the subsystem can be
+switched off entirely with `ACTIVE_LEARNING_ENABLED=false`.
+
+Governing rule:
+
+> The runtime selects and exports. Training happens elsewhere, from a versioned
+> file, after a human approved it.
+
+| Artifact | Meaning |
+|---|---|
+| `ActiveLearningCandidate` | A retained run, its signals and its review state |
+| `SelectionReason` | Bounded reason codes explaining *why* it was retained |
+| `ScoreBreakdown` | Deterministic informativeness score and its components |
+| `DatasetManifest` | Lineage of one exported dataset version |
+
+`finetuning/` is a separate top-level package with its own `pyproject.toml`. It
+is never imported by `app/`, never started by the FastAPI lifespan, and reaches
+Ariadne only through exported dataset files. Tests assert both directions of
+that boundary, including that no ML library is imported at module scope.
+
+## Known limitations
+
+- Local 7B routing is imperfect; prompted mode is conservative
+- Analytics plan quality varies; invalid plans are rejected (numbers never invented)
+- `area["name"=…]` place scopes can be ambiguous
+- Landmark coordinates come from `resolve_place` or explicit user input
+- Distances are geodesic nearest-feature meters, not route-based
+- Relation geometry support is partial (warnings, no invention)
+- CPU embedding latency on first use / indexing
+- Browser needs network for MapLibre / OpenFreeMap / fonts
+- Persian/Arabic basemap labels require MapLibre's RTL text plugin
+  (`@mapbox/mapbox-gl-rtl-text` 0.2.3, served from `/static/vendor`,
+  registered once with `setRTLTextPlugin` before the map is created)
+- MVP has no authn/authz or multi-tenant isolation

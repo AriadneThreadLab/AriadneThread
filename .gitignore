@@ -18,14 +18,57 @@ venv/
 .mypy_cache/
 .ruff_cache/
 .coverage
+coverage.xml
 htmlcov/
+.cache/
+cache/
 
 # Editors / OS
 .idea/
 .vscode/
 .DS_Store
+*.swp
+*~
 
-# Local data and artifacts
+# Local data, logs, and artifacts
 *.log
+logs/
 /data/
 /tmp/
+outputs/
+experiments/
+reports/
+*.sqlite
+*.sqlite3
+*.db
+!alembic.ini
+
+# Archives and generated dumps
+*.zip
+*.tar
+*.tar.gz
+README.zip
+
+# Internal research notes, drafts, and operator checklists
+# (kept locally; not published on GitHub)
+docs/internal/
+**/Untitled
+**/*-draft.md
+**/*.orig
+**/*.bak
+
+# Fine-tuning: model weights, adapters, checkpoints and exported datasets are
+# reproducible outputs, never repository content.
+finetuning/artifacts/
+finetuning/data/*.jsonl
+finetuning/data/*.manifest.json
+finetuning/data/*.schema.json
+finetuning/.venv/
+finetuning/**/__pycache__/
+finetuning/**/*.egg-info/
+**/checkpoints/
+**/*.safetensors
+**/*.ckpt
+**/*.pt
+**/*.bin
+!app/web/static/**/*.png

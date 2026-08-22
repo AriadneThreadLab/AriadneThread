@@ -19,7 +19,9 @@ from app.core.errors import (
     ToolNotRegisteredError,
 )
 from app.llm.contracts import ToolCall, ToolDefinition
+from app.tools.context import ToolContext
 from app.tools.contracts import Tool, ToolOutcome, tool_definition
+from app.tools.validation import format_tool_argument_observation, summarise_validation_error
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,15 +34,25 @@ class ToolInvocation:
     observation: str
     payload: Any | None = None
     error_code: str | None = None
+    public_error: str | None = None
+    failure_meta: dict[str, Any] | None = None
 
     @classmethod
     def failure(cls, call: ToolCall, error: ToolError) -> ToolInvocation:
+        observation = getattr(error, "observation", None)
+        if not isinstance(observation, str) or not observation.strip():
+            observation = f"Tool '{call.name}' failed ({error.code}): {error.message}"
+        failure_meta = getattr(error, "failure_meta", None)
+        if failure_meta is not None and not isinstance(failure_meta, dict):
+            failure_meta = None
         return cls(
             call_id=call.id,
             tool_name=call.name,
             ok=False,
-            observation=f"Tool '{call.name}' failed ({error.code}): {error.message}",
+            observation=observation,
             error_code=error.code,
+            public_error=error.message,
+            failure_meta=failure_meta,
         )
 
 
@@ -82,15 +94,32 @@ class ToolRegistry:
             return tool.args_model.model_validate(call.arguments)
         except ValidationError as exc:
             raise ToolArgumentError(
-                f"invalid arguments for '{call.name}': {_summarise(exc)}"
+                f"invalid arguments for '{call.name}': {summarise_validation_error(exc)}"
             ) from exc
 
-    async def invoke(self, call: ToolCall) -> ToolInvocation:
+    async def invoke(self, call: ToolCall, context: ToolContext) -> ToolInvocation:
         """Validate and run one tool call, never raising for tool-level failures."""
         try:
             tool = self.get(call.name)
-            args = self.validate_arguments(call)
-            outcome: ToolOutcome[Any] = await tool.execute(args)
+        except ToolError as error:
+            return ToolInvocation.failure(call, error)
+        try:
+            args = tool.args_model.model_validate(call.arguments)
+        except ValidationError as exc:
+            observation = format_tool_argument_observation(
+                call.name,
+                exc,
+                argument_keys=sorted(str(key) for key in call.arguments),
+            )
+            return ToolInvocation(
+                call_id=call.id,
+                tool_name=call.name,
+                ok=False,
+                observation=observation,
+                error_code="tool_argument_error",
+            )
+        try:
+            outcome: ToolOutcome[Any] = await tool.execute(args, context)
         except ToolError as error:
             return ToolInvocation.failure(call, error)
         return ToolInvocation(
@@ -100,12 +129,3 @@ class ToolRegistry:
             observation=outcome.observation,
             payload=outcome.payload,
         )
-
-
-def _summarise(error: ValidationError, *, max_errors: int = 3) -> str:
-    """Render validation problems compactly enough to feed back to the model."""
-    parts = []
-    for detail in error.errors()[:max_errors]:
-        location = ".".join(str(item) for item in detail["loc"]) or "<root>"
-        parts.append(f"{location}: {detail['msg']}")
-    return "; ".join(parts)

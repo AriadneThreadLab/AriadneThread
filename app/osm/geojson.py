@@ -22,10 +22,6 @@ from app.osm.contracts import (
 )
 
 
-def empty_feature_collection() -> dict[str, Any]:
-    return {"type": "FeatureCollection", "features": []}
-
-
 class OverpassGeoJsonEncoder:
     """Deterministic Overpass → GeoJSON converter for the MVP element subset."""
 

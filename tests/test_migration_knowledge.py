@@ -24,11 +24,13 @@ def _load_migration_module():
     return module
 
 
-def test_alembic_heads_include_knowledge_revision():
+def test_alembic_history_is_linear_and_starts_at_knowledge_revision():
     config = Config(str(REPO_ROOT / "alembic.ini"))
     script = ScriptDirectory.from_config(config)
-    heads = script.get_heads()
-    assert heads == ["20260801_0001"]
+    # One head keeps `alembic upgrade head` unambiguous.
+    assert len(script.get_heads()) == 1
+    revisions = [revision.revision for revision in script.walk_revisions()]
+    assert revisions[-1] == "20260801_0001"
 
 
 def test_knowledge_migration_module_imports_and_declares_revision():

@@ -21,6 +21,7 @@ from typing import Any, Generic, Protocol, TypeVar, runtime_checkable
 from pydantic import BaseModel
 
 from app.llm.contracts import ToolDefinition
+from app.tools.context import ToolContext
 
 ArgsT = TypeVar("ArgsT", bound=BaseModel)
 ResultT = TypeVar("ResultT", bound=BaseModel)
@@ -52,7 +53,7 @@ class Tool(Protocol[ArgsT, ResultT]):
     @property
     def args_model(self) -> type[ArgsT]: ...
 
-    async def execute(self, args: ArgsT) -> ToolOutcome[ResultT]: ...
+    async def execute(self, args: ArgsT, context: ToolContext) -> ToolOutcome[ResultT]: ...
 
 
 def tool_definition(tool: Tool[Any, Any]) -> ToolDefinition:

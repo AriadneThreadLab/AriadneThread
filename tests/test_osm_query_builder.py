@@ -23,7 +23,10 @@ def test_place_query_matches_expected_overpass_ql():
     )
     assert build_overpass_query(query, timeout_seconds=60) == (
         "[out:json][timeout:60];\n"
-        'area["name"="Berlin"]->.searchArea;\n'
+        "(\n"
+        '  area["name"="Berlin"];\n'
+        '  area["name:en"="Berlin"];\n'
+        ")->.searchArea;\n"
         "(\n"
         '  node["leisure"="park"](area.searchArea);\n'
         '  way["leisure"="park"](area.searchArea);\n'
@@ -31,6 +34,19 @@ def test_place_query_matches_expected_overpass_ql():
         ");\n"
         "out geom 1000;"
     )
+
+
+def test_place_with_country_suffix_uses_primary_toponym():
+    query = OsmFeatureQuery(
+        place="Tehran, Iran",
+        tags=[TagFilter(key="leisure", value="park")],
+        limit=20,
+    )
+    built = build_overpass_query(query, timeout_seconds=60)
+    assert 'area["name"="Tehran"]' in built
+    assert 'area["name:en"="Tehran"]' in built
+    assert "Tehran, Iran" not in built
+    assert built.endswith("out geom 20;")
 
 
 def test_point_radius_query_uses_around_filter():
@@ -69,6 +85,24 @@ def test_multiple_tags_are_combined_with_and():
     )
     built = build_overpass_query(query, timeout_seconds=30)
     assert '  way["leisure"="park"]["access"="yes"](area.searchArea);' in built
+
+
+def test_tag_match_any_emits_union_statements():
+    query = OsmFeatureQuery(
+        place="Berlin",
+        tags=[
+            TagFilter(key="leisure", value="park"),
+            TagFilter(key="landuse", value="grass"),
+            TagFilter(key="natural", value="wood"),
+        ],
+        tag_match="any",
+        element_types=["way"],
+    )
+    built = build_overpass_query(query, timeout_seconds=30)
+    assert '  way["leisure"="park"](area.searchArea);' in built
+    assert '  way["landuse"="grass"](area.searchArea);' in built
+    assert '  way["natural"="wood"](area.searchArea);' in built
+    assert '["leisure"="park"]["landuse"="grass"]' not in built
 
 
 def test_element_type_order_is_stable_regardless_of_input_order():

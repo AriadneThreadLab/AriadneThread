@@ -1,11 +1,9 @@
 """FastAPI application factory and lifespan.
 
-Long-lived resources are created once at startup, attached to ``app.state`` and
-released at shutdown. Nothing connects to PostgreSQL, Ollama or Hugging Face at
-import time. The BGE-M3 model is constructed lazily and only loaded on first use.
-
-Phase 5 wires the planner-executor agent into application state. The production
-``/agent/query`` HTTP endpoint is intentionally deferred to Phase 6.
+Long-lived resources are created once at startup via the composition root
+(:mod:`app.bootstrap`), attached to ``app.state``, and released at shutdown.
+Nothing connects to PostgreSQL, Ollama or Hugging Face at import time. BGE-M3
+is constructed lazily and only loaded on first embedding use.
 """
 
 from __future__ import annotations
@@ -13,80 +11,80 @@ from __future__ import annotations
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
-from fastapi.responses import JSONResponse
-from starlette.requests import Request
+from fastapi.staticfiles import StaticFiles
 
 from app import __version__
-from app.agent.factory import build_geo_agent
+from app.api.agent import router as agent_router
+from app.api.errors import register_exception_handlers
 from app.api.health import router as health_router
+from app.api.middleware import request_context_middleware
+from app.bootstrap import ApplicationServices, build_application_services
 from app.core.config import Settings, get_settings
-from app.core.errors import GeoAgentError
 from app.core.logging import configure_logging
-from app.db.session import Database, DatabaseConfig
-from app.embeddings.factory import build_bge_m3_provider
-from app.llm.factory import build_ollama_provider
-from app.osm.factory import build_query_osm_tool
-from app.rag.retriever import SessionBoundKnowledgeRetriever
-from app.tools.factory import build_tool_registry
+from app.web.routes import router as ui_router
 
 logger = logging.getLogger(__name__)
 
+_STATIC_DIR = Path(__file__).resolve().parent / "web" / "static"
 
-def create_app(settings: Settings | None = None) -> FastAPI:
-    """Build the application. Accepts settings so tests can override them."""
+
+def create_app(
+    settings: Settings | None = None,
+    *,
+    services: ApplicationServices | None = None,
+) -> FastAPI:
+    """Build the application.
+
+    ``services`` may be supplied by tests to inject fakes without touching
+    PostgreSQL, Ollama or Overpass.
+    """
     resolved = settings or get_settings()
     configure_logging(resolved.log_level)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        database = Database(DatabaseConfig(url=resolved.database_url))
-        embedder = build_bge_m3_provider(resolved)
-        retriever = SessionBoundKnowledgeRetriever(database, embedder)
-        query_osm_tool = build_query_osm_tool(resolved)
-        llm = build_ollama_provider(resolved)
-        registry = build_tool_registry(
-            knowledge_retriever=retriever,
-            query_osm_tool=query_osm_tool,
-            rag_top_k=resolved.rag_top_k,
-        )
-        agent = build_geo_agent(llm, registry, resolved)
-        app.state.settings = resolved
-        app.state.database = database
-        app.state.embedding_provider = embedder
-        app.state.query_osm_tool = query_osm_tool
-        app.state.llm_provider = llm
-        app.state.tool_registry = registry
-        app.state.geo_agent = agent
+        owned = services or build_application_services(resolved)
+        app.state.settings = owned.settings
+        app.state.services = owned
+        app.state.database = owned.database
+        app.state.embedding_provider = owned.embedding_provider
+        app.state.query_osm_tool = owned.query_osm_tool
+        app.state.llm_provider = owned.llm_provider
+        app.state.tool_registry = owned.tool_registry
+        app.state.geo_agent = owned.geo_agent
+        # Selection only. No training pipeline is imported or started here.
+        app.state.active_learning = owned.active_learning
         logger.info(
-            "OSM GeoAgent starting (env=%s, model=%s, tools=%s)",
-            resolved.app_env,
-            resolved.ollama_model,
-            ",".join(registry.names) or "none",
+            "OSM GeoAgent starting (env=%s, provider=%s, model=%s, llm_host=%s, tools=%s)",
+            owned.settings.app_env,
+            owned.settings.llm_provider,
+            owned.settings.llm_model,
+            owned.settings.llm_endpoint_host,
+            ",".join(owned.tool_registry.names) or "none",
         )
         try:
             yield
         finally:
-            await llm.aclose()
-            await query_osm_tool.aclose()
-            await embedder.aclose()
-            await database.dispose()
+            # Only dispose resources this lifespan created.
+            if services is None:
+                await owned.aclose()
             logger.info("OSM GeoAgent stopped")
 
     app = FastAPI(
-        title="OSM GeoAgent",
+        title="Ariadne Thread",
         version=__version__,
-        summary="Natural-language GIS requests turned into controlled OpenStreetMap operations.",
+        summary="Knowledge-grounded OpenStreetMap search and analysis.",
         lifespan=lifespan,
     )
+    register_exception_handlers(app)
     app.include_router(health_router)
-
-    @app.exception_handler(GeoAgentError)
-    async def handle_geoagent_error(_: Request, exc: GeoAgentError) -> JSONResponse:
-        logger.warning("request failed: %s (%s)", exc.message, exc.code)
-        return JSONResponse(status_code=400, content={"code": exc.code, "detail": exc.message})
-
+    app.include_router(agent_router)
+    app.include_router(ui_router)
+    app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
+    app.middleware("http")(request_context_middleware)
     return app
 
 

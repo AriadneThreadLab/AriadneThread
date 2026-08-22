@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import pytest
+from app.analytics.datasets import DatasetRegistry
 from app.core.errors import ToolArgumentError, ToolExecutionError, ToolNotRegisteredError
 from app.llm.contracts import ToolCall
+from app.places.contracts import PlaceRegistry
+from app.tools.context import AnalysisRunState, GroundingState, ToolContext
 from app.tools.contracts import ToolOutcome, tool_definition
 from app.tools.registry import ToolRegistry
 from pydantic import BaseModel, ConfigDict, Field
@@ -21,6 +24,16 @@ class EchoResult(BaseModel):
     echoed: str
 
 
+def _ctx() -> ToolContext:
+    return ToolContext(
+        datasets=DatasetRegistry(),
+        analysis=AnalysisRunState(),
+        user_message="hi",
+        places=PlaceRegistry(),
+        grounding=GroundingState(),
+    )
+
+
 class EchoTool:
     name = "echo"
     description = "Echo the given text."
@@ -29,7 +42,8 @@ class EchoTool:
     def __init__(self) -> None:
         self.calls: list[EchoArgs] = []
 
-    async def execute(self, args: EchoArgs) -> ToolOutcome[EchoResult]:
+    async def execute(self, args: EchoArgs, context: ToolContext) -> ToolOutcome[EchoResult]:
+        del context
         self.calls.append(args)
         echoed = " ".join([args.text] * args.times)
         return ToolOutcome(observation=f"echoed '{echoed}'", payload=EchoResult(echoed=echoed))
@@ -40,7 +54,8 @@ class ExplodingTool:
     description = "Always fails."
     args_model = EchoArgs
 
-    async def execute(self, args: EchoArgs) -> ToolOutcome[EchoResult]:
+    async def execute(self, args: EchoArgs, context: ToolContext) -> ToolOutcome[EchoResult]:
+        del args, context
         raise ToolExecutionError("upstream refused the request")
 
 
@@ -55,7 +70,8 @@ async def test_registered_tool_runs_with_validated_arguments():
     tool = EchoTool()
     registry = _registry(tool)
     result = await registry.invoke(
-        ToolCall(id="c1", name="echo", arguments={"text": "hi", "times": 2})
+        ToolCall(id="c1", name="echo", arguments={"text": "hi", "times": 2}),
+        _ctx(),
     )
 
     assert result.ok
@@ -66,7 +82,7 @@ async def test_registered_tool_runs_with_validated_arguments():
 
 async def test_unknown_tool_is_reported_without_execution():
     registry = _registry(EchoTool())
-    result = await registry.invoke(ToolCall(id="c1", name="rm_rf", arguments={}))
+    result = await registry.invoke(ToolCall(id="c1", name="rm_rf", arguments={}), _ctx())
 
     assert not result.ok
     assert result.error_code == "tool_not_registered"
@@ -75,7 +91,10 @@ async def test_unknown_tool_is_reported_without_execution():
 
 async def test_invalid_arguments_are_reported_with_the_failing_field():
     registry = _registry(EchoTool())
-    result = await registry.invoke(ToolCall(id="c1", name="echo", arguments={"times": 99}))
+    result = await registry.invoke(
+        ToolCall(id="c1", name="echo", arguments={"times": 99}),
+        _ctx(),
+    )
 
     assert not result.ok
     assert result.error_code == "tool_argument_error"
@@ -85,7 +104,8 @@ async def test_invalid_arguments_are_reported_with_the_failing_field():
 async def test_unexpected_arguments_are_rejected():
     registry = _registry(EchoTool())
     result = await registry.invoke(
-        ToolCall(id="c1", name="echo", arguments={"text": "hi", "shell": "rm -rf /"})
+        ToolCall(id="c1", name="echo", arguments={"text": "hi", "shell": "rm -rf /"}),
+        _ctx(),
     )
     assert not result.ok
     assert result.error_code == "tool_argument_error"
@@ -93,7 +113,10 @@ async def test_unexpected_arguments_are_rejected():
 
 async def test_tool_failures_become_structured_observations():
     registry = _registry(ExplodingTool())
-    result = await registry.invoke(ToolCall(id="c1", name="explode", arguments={"text": "x"}))
+    result = await registry.invoke(
+        ToolCall(id="c1", name="explode", arguments={"text": "x"}),
+        _ctx(),
+    )
 
     assert not result.ok
     assert result.error_code == "tool_execution_error"

@@ -1,0 +1,46 @@
+# Traceability and explainability
+
+Every Ariadne Thread result is meant to be followed from the question to the
+final report. The system records an operational thread, not hidden
+chain-of-thought.
+
+## What is recorded
+
+| Artifact | Role |
+|---|---|
+| `execution_trace` | Ordered workflow steps: request, planning turns, tool calls, results, stop reason |
+| `knowledge_sources` | OSM Wiki citations used for grounding (title, section, URL, score) |
+| `overpass_query` | The compiled Overpass QL for the live retrieval (read-only provenance) |
+| `analysis.plan` | The validated analytical plan the tools executed |
+| `analysis.decision_trace` | Catalog rules and feasibility outcomes that selected the metric |
+| `analysis.result` / `comparison` | Computed values and the comparison statement |
+| Attribution | OpenStreetMap ODbL credit on live results |
+
+Hidden `<think>` content is stripped at the LLM provider boundary. It is never
+written to the trace, logs, or the user interface.
+
+## Workflow the user can inspect
+
+The Analysis Workflow panel renders `execution_trace` as compact steps:
+tool name, status, scope, tags, limits, and feature counts. A client-side
+“rendered GeoJSON on the map” event is marked as local and is not a model
+decision.
+
+OSM Documentation Sources lists the retrieved Wiki pages. The Comparison Report
+states the analysis goal, selected indicator, method, and data limitations.
+
+## Provenance on the map
+
+Live features keep OSM identifiers and tags. Comparison layers are coloured by
+analysis target. The downloaded GeoJSON is the same FeatureCollection the API
+returned.
+
+## Analytical thread
+
+```
+question → plan → grounded tags → place resolution → Overpass retrieval
+        → deterministic metrics → report + map + citations
+```
+
+If a step fails (invalid plan, empty Overpass result, place ambiguity), the
+trace still records the failure. Empty geographic results stay empty.
