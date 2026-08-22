@@ -45,36 +45,41 @@ A geographic question moves through four layers: interaction, planning and
 grounding, controlled tools and live OSM data, then transparent outputs.
 
 ```mermaid
-flowchart TB
+%%{init: {"theme": "base", "themeVariables": {"primaryColor": "#f6f8fa", "primaryTextColor": "#1f2328", "primaryBorderColor": "#d0d7de", "lineColor": "#8c959f", "clusterBkg": "#ffffff", "clusterBorder": "#8c959f"}, "flowchart": {"curve": "basis", "padding": 8, "nodeSpacing": 18, "rankSpacing": 28}}}%%
+flowchart LR
   subgraph I["Interaction Layer"]
     Q(["User Question"])
   end
-
   subgraph N["Intelligence Layer"]
-    direction LR
-    P["Planner"] --> K["Knowledge Grounding"]
+    P(["Planner"])
+    K(["Knowledge Grounding"])
   end
-
   subgraph D["Data and Tools Layer"]
-    direction LR
-    T["Tool Runner"] --> O["OSM Retrieval"] --> A["Spatial Analysis"]
+    T(["Tool Runner"])
+    O(["OSM Retrieval"])
+    A(["Spatial Analysis"])
   end
-
   subgraph X["Output Layer"]
     R(["Transparent Results"])
   end
 
-  Q --> P
-  K --> T
-  A --> R
+  Q --> P --> K --> T --> O --> A --> R
+
+  classDef step fill:#f6f8fa,stroke:#d0d7de,stroke-width:1px,color:#1f2328
+  class Q,P,K,T,O,A,R step
+
+  style I fill:#ffffff,stroke:#8c959f,stroke-width:1px,stroke-dasharray:5 4,color:#656d76
+  style N fill:#ffffff,stroke:#8c959f,stroke-width:1px,stroke-dasharray:5 4,color:#656d76
+  style D fill:#ffffff,stroke:#8c959f,stroke-width:1px,stroke-dasharray:5 4,color:#656d76
+  style X fill:#ffffff,stroke:#8c959f,stroke-width:1px,stroke-dasharray:5 4,color:#656d76
 ```
 
 Ariadne Thread turns a natural-language geographic question into a traceable
 analytical workflow. The planner grounds the request in OSM documentation,
-executes a small set of validated tools, retrieves live OpenStreetMap features,
-and computes spatial or statistical outputs in deterministic code. The interface
-returns the answer together with the map, comparison, citations, and workflow
-so the path from question to result stays inspectable.
+executes validated tools, retrieves live OpenStreetMap features, and computes
+spatial or statistical outputs in deterministic code. The result is returned
+with the map, comparison, citations, and workflow so the path from question
+to answer stays inspectable.
 
 Details: [docs/architecture.md](docs/architecture.md).
 
