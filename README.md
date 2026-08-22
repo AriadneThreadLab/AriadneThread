@@ -1,162 +1,215 @@
-# OSM GeoAgent
+# Ariadne Thread
 
-Turns natural-language GIS requests into controlled OpenStreetMap operations,
-grounded in OSM documentation and answered with real Overpass data.
+Ariadne Thread is an open-source research software framework for
+knowledge-grounded geographic analysis using AI agents, spatial data, and
+explainable analytical workflows.
 
+It is an AI-assisted spatial analysis companion: it helps formulate a geographic
+question, retrieve spatial information, select an appropriate analytical method,
+perform a statistical comparison, and return a transparent result that can be
+inspected from the question through to the map.
+
+The name refers to Ariadne’s thread in Greek mythology, a line that made a path
+through complexity recoverable. The software applies the same idea to GeoAI: a
+traceable thread from the geographic question to data retrieval, spatial
+analysis, and interpretation.
+
+## Demo
+
+![Ariadne Thread demo: geographic question, agent workflow, OSM retrieval, statistical comparison, and provenance](images/demo.gif)
+
+*End-to-end run of a multi-target green-space comparison: the planner grounds
+the request, retrieves OpenStreetMap features, computes a catalog metric, and
+exposes the workflow and data provenance in the interface.*
+
+## Key Features
+
+- **AI-assisted geographic question answering.** Natural-language requests are
+  turned into a small set of controlled tools, not free-form code execution.
+- **OpenStreetMap integration.** Live features are retrieved through a
+  deterministic Overpass builder; the model does not write Overpass QL.
+- **Spatial feature retrieval.** Named places are resolved through a trusted
+  geocoder tool; results are returned as GeoJSON.
+- **Statistical comparison.** Equal-scope multi-target comparisons are computed
+  by deterministic analytics (counts, densities, areas, distances).
+- **Explainable workflows.** Each run records planning turns, tool calls, and
+  stop reasons as an inspectable sequence.
+- **Data provenance.** OSM Wiki citations, compiled Overpass queries, tags,
+  scopes, and attribution travel with the result.
+- **Reproducible spatial analysis.** Bounded loops, validated tool arguments,
+  and offline tests keep a run checkable after it finishes.
+
+## System Architecture
+
+```mermaid
+flowchart TD
+  Q[User question] --> P[AI planning layer]
+  P --> K[Knowledge grounding]
+  K --> T[Tool execution]
+  T --> O[OpenStreetMap retrieval]
+  O --> S[Spatial processing]
+  S --> A[Statistical analysis]
+  A --> E[Explainable report]
 ```
-"Find public parks in Berlin."
-"فضاهای سبز برلین را از OpenStreetMap پیدا کن."
-"Find pharmacies around Alexanderplatz."
-"What OSM tags should be used for urban green areas?"
-```
 
-The agent looks up OSM tagging conventions in a local documentation corpus,
-then queries live features through the Overpass API, and returns an answer with
-its sources, an execution trace and GeoJSON.
+The planner proposes tool calls. The Tool Registry is the only execution path.
+Documentation is retrieved before live data when tagging must be grounded.
+Numbers are produced only by the analytics engine. The interface shows the
+report, the workflow, the citations, and the map together.
 
-Architecture: **Knowledge-Grounded Planner-Executor GeoAgent with Tool
-Orchestration**. See [docs/architecture.md](docs/architecture.md).
+Details: [docs/architecture.md](docs/architecture.md).
 
-## Status
+## Retrieval-Augmented Generation (RAG)
 
-Foundation through bounded planner-executor orchestration. Both tools are
-registered, the Ollama-backed agent loop is implemented, and a developer CLI
-diagnostic is available. The production `/agent/query` endpoint and map UI are
-next - see [Roadmap](#roadmap).
+Ariadne Thread combines language reasoning with domain-specific geographic
+knowledge instead of relying only on the model’s internal parameters.
 
-## Requirements
+A **whitelisted** OSM Wiki corpus is embedded (BGE-M3) and stored in PostgreSQL
+with pgvector. `search_osm_knowledge` returns scored passages. Those citations
+ground tag choices and appear in the OSM Documentation Sources panel. RAG never
+populates GeoJSON; live features come only from Overpass.
 
-- Python 3.10 (WSL2 Ubuntu 22.04 is the reference environment)
-- PostgreSQL 17 with the `postgis` and `vector` extensions
-- Ollama with a local chat model (`deepseek-r1:7b` is the verified default)
-- Optional, for embeddings: an NVIDIA GPU and the `BAAI/bge-m3` model
+Details: [docs/rag.md](docs/rag.md).
 
-## Setup
+## Traceability and Explainability
+
+Every result keeps an analytical thread from question to answer:
+
+- workflow steps and tool outcomes
+- retrieved documentation sources
+- analytical decisions (catalog metric, feasibility, limitations)
+- generated Overpass queries
+- feature-level OSM identifiers and attribution
+
+Hidden model reasoning is stripped at the provider boundary and is not part of
+the public trace.
+
+Details: [docs/traceability.md](docs/traceability.md).
+
+## Spatial Analysis Capabilities
+
+- OpenStreetMap point, line, and polygon features
+- Buffer / radius queries around resolved places
+- GeoJSON visualization and download
+- Statistical comparison across analysis targets
+- Geographic indicators from a fixed metric catalog (abundance, concentration,
+  accessibility, area, coverage)
+
+Distances are geodesic nearest-feature metres, not routed travel time.
+
+## Active Learning and Model Improvement
+
+**Implemented**
+
+- Optional feedback on a completed run (`POST /api/v1/agent/feedback`)
+- Deterministic scoring that can retain informative or failing cases
+- A human review queue (approve, correct, reject)
+- Export of curated examples for later experiments
+
+Active learning does not train a model during a request and does not fail a
+user query if the review store is unavailable.
+
+**Future research**
+
+- Human-in-the-loop refinement of planner decisions
+- Better support for metric-selection failures
+- Adaptive agent behaviour after reviewed corrections
+
+See [docs/active-learning-and-finetuning.md](docs/active-learning-and-finetuning.md).
+
+## Fine-tuning Research Direction
+
+**Current system**
+
+`finetuning/` is a separate package. The running service never imports it and
+never starts training. The packages meet only at a versioned dataset file
+produced by the exporter.
+
+**Future experiments**
+
+- Domain-specific geographic reasoning (tag choice, comparison goals)
+- Adaptation of language models for structured GeoAI plans
+- Improving GeoAI understanding under a frozen evaluation split
+
+This repository does not contain a completed training run or published adapter.
+
+## Deployment
+
+Install dependencies, create the PostGIS/pgvector database, index the OSM Wiki
+corpus, and start the API and web interface from one process:
 
 ```bash
 python3 -m venv .venv
-./.venv/bin/pip install -e ".[dev]"      # add ".[dev,embeddings]" for BGE-M3
-cp .env.example .env                      # then fill in DATABASE_URL
-```
-
-Create the project's own database (do not reuse another project's):
-
-```bash
-createdb -h 127.0.0.1 -p 5433 osm_geoagent
-psql -h 127.0.0.1 -p 5433 -d osm_geoagent -c "CREATE EXTENSION IF NOT EXISTS postgis;"
-psql -h 127.0.0.1 -p 5433 -d osm_geoagent -c "CREATE EXTENSION IF NOT EXISTS vector;"
-```
-
-## Run
-
-```bash
-./.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8100 --reload
-curl http://127.0.0.1:8100/health
-```
-
-Interactive API docs: <http://127.0.0.1:8100/docs>
-
-## Checks
-
-```bash
-./.venv/bin/pytest            # no network, no database, no model downloads
-./.venv/bin/ruff check .
-./.venv/bin/ruff format --check .
-./.venv/bin/mypy app tests
-```
-
-## Migrations
-
-After creating `.env` with a real `DATABASE_URL` and creating the empty
-`osm_geoagent` database:
-
-```bash
+./.venv/bin/pip install -e ".[dev]"
+cp .env.example .env
 ./.venv/bin/alembic upgrade head
+./.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8100 --reload
 ```
 
-The first revision enables `postgis` and `vector`, then creates the knowledge
-tables. The URL comes from `DATABASE_URL`; `alembic.ini` holds no credentials.
+Full environment, database, and test instructions:
+[docs/deployment.md](docs/deployment.md).
 
-## Configuration
+API examples: [docs/usage.md](docs/usage.md).
 
-All settings live in `.env` (see `.env.example`): application host/port,
-`DATABASE_URL`, Ollama base URL/model/context/timeout, BGE-M3 model/device/
-batch size, Overpass endpoint/timeout/limits, `RAG_TOP_K`, and the agent loop
-bounds `AGENT_MAX_TOOL_ROUNDS` / `AGENT_MAX_TOOL_CALLS`.
+## Technology Stack
 
-## Ingest OSM documentation
+**Backend.** Python 3.10, FastAPI, PostgreSQL, PostGIS, pgvector.
 
-Fetch the eight whitelisted OSM wiki pages via the MediaWiki API, chunk them
-heading-aware, and upsert into `knowledge_documents` / `knowledge_chunks`
-(idempotent; no embeddings in this step):
+**AI.** LLM providers (Ollama or an OpenAI-compatible gateway), BGE-M3
+embeddings, RAG over a local OSM Wiki corpus.
 
-```bash
-./.venv/bin/python -m app.cli ingest-osm-knowledge
-```
+**Spatial.** OpenStreetMap, Overpass API, Nominatim-compatible place search,
+GeoJSON.
 
-## Index embeddings (BGE-M3)
+**Frontend.** FastAPI-served web interface and MapLibre map visualization.
 
-Requires the optional embeddings extra and a local Hugging Face cache of
-`BAAI/bge-m3` (no automatic download):
+## Screenshots
 
-```bash
-./.venv/bin/pip install -e ".[embeddings]"
-./.venv/bin/python -m app.cli index-osm-knowledge
-```
+### User geographic question
 
-Re-embed everything:
+![Query interface with example geographic questions and the Istanbul map](images/query.png)
 
-```bash
-./.venv/bin/python -m app.cli index-osm-knowledge --force
-```
+*The console accepts a geographic question and shows retrieved features on the
+map.*
 
-Diagnostic retrieval (cosine similarity; higher score is better):
+### Analytical answer and spatial comparison
 
-```bash
-./.venv/bin/python -m app.cli search-osm-knowledge --query "پارک عمومی در OSM با چه تگی مشخص می‌شود؟"
-```
+![Comparison report and two-colour green-space map](images/result.png)
 
-`BGE_DEVICE` defaults to `cpu` so Ollama can keep the GPU. Set `BGE_DEVICE=cuda`
-only when you intentionally want embeddings on the GPU.
+*The report states the goal, selected indicator, method, and limitations. Map
+layers are coloured by analysis target.*
 
-Optional integration tests (real BGE-M3 + DB and/or a tiny live Overpass call):
+### Execution workflow and provenance
 
-```bash
-RUN_INTEGRATION=1 ./.venv/bin/pytest -m integration
-```
+![Analysis workflow and documentation sources](images/traceability.png)
 
-Live Overpass only (still requires `RUN_INTEGRATION=1`):
+*Workflow steps and OSM Wiki citations make the analytical thread inspectable.*
 
-```bash
-RUN_INTEGRATION=1 ./.venv/bin/pytest -m integration tests/test_overpass_integration.py
-```
+## Research Software Positioning
 
-## Agent diagnostic (developer)
+Ariadne Thread is designed as:
 
-Run one bounded planner-executor request with the configured Ollama model,
-retrieval stack and Overpass client (not the production API):
+- open-source research software
+- a GeoAI experimentation platform
+- a reproducible spatial analysis framework
+- an explainable, AI-assisted geographic analysis system
 
-```bash
-./.venv/bin/python -m app.cli agent-query --message "Find public parks in Berlin"
-```
+It is not a production GIS product. There is no authentication or multi-tenant
+isolation in this tree. Invalid analytical plans are rejected; numbers are never
+invented.
 
-Optional real-Ollama integration test:
+## Documentation
 
-```bash
-RUN_INTEGRATION=1 ./.venv/bin/pytest -m integration tests/test_agent_integration.py
-```
+- [Architecture](docs/architecture.md)
+- [RAG](docs/rag.md)
+- [Traceability](docs/traceability.md)
+- [Deployment](docs/deployment.md)
+- [Usage](docs/usage.md)
+- [Active learning and fine-tuning](docs/active-learning-and-finetuning.md)
 
-## Roadmap
+## License and attribution
 
-1. ~~`knowledge_documents` / `knowledge_chunks` models and the first migration~~
-2. ~~OSM wiki ingestion for the eight whitelisted pages, plus chunking~~
-3. ~~BGE-M3 indexing and pgvector similarity retrieval~~
-4. ~~The Overpass HTTP client, GeoJSON encoder, and registered `query_osm`~~
-5. ~~Bounded planner-executor agent loop (Ollama + Tool Registry)~~
-6. The production `/agent/query` FastAPI endpoint
-7. A map UI
+This software is released under the [MIT License](LICENSE).
 
-## Data and licensing
-
-Map data is © OpenStreetMap contributors, licensed ODbL. OSM wiki text is
-CC-BY-SA. Attribution is carried through every `query_osm` result.
+Map data © [OpenStreetMap contributors](https://www.openstreetmap.org/copyright)
+(ODbL). OSM Wiki text is CC-BY-SA.
