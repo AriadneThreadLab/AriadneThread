@@ -41,21 +41,40 @@ exposes the workflow and data provenance in the interface.*
 
 ## System Architecture
 
+A geographic question moves through four layers: interaction, planning and
+grounding, controlled tools and live OSM data, then transparent outputs.
+
 ```mermaid
-flowchart TD
-  Q[User question] --> P[AI planning layer]
-  P --> K[Knowledge grounding]
-  K --> T[Tool execution]
-  T --> O[OpenStreetMap retrieval]
-  O --> S[Spatial processing]
-  S --> A[Statistical analysis]
-  A --> E[Explainable report]
+flowchart TB
+  subgraph I["Interaction Layer"]
+    Q(["User Question"])
+  end
+
+  subgraph N["Intelligence Layer"]
+    direction LR
+    P["Planner"] --> K["Knowledge Grounding"]
+  end
+
+  subgraph D["Data and Tools Layer"]
+    direction LR
+    T["Tool Runner"] --> O["OSM Retrieval"] --> A["Spatial Analysis"]
+  end
+
+  subgraph X["Output Layer"]
+    R(["Transparent Results"])
+  end
+
+  Q --> P
+  K --> T
+  A --> R
 ```
 
-The planner proposes tool calls. The Tool Registry is the only execution path.
-Documentation is retrieved before live data when tagging must be grounded.
-Numbers are produced only by the analytics engine. The interface shows the
-report, the workflow, the citations, and the map together.
+Ariadne Thread turns a natural-language geographic question into a traceable
+analytical workflow. The planner grounds the request in OSM documentation,
+executes a small set of validated tools, retrieves live OpenStreetMap features,
+and computes spatial or statistical outputs in deterministic code. The interface
+returns the answer together with the map, comparison, citations, and workflow
+so the path from question to result stays inspectable.
 
 Details: [docs/architecture.md](docs/architecture.md).
 
