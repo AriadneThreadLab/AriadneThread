@@ -1,0 +1,48 @@
+indicator_id: poi_density
+domain: urban_services
+display_label: POI density
+purpose: Count of mapped urban-service points of interest per square kilometre.
+goals: [concentration]
+method_id: density
+formula: "n(service POIs) / area(analysis_area)"
+unit: features_per_km2
+display_precision: 1
+direction: higher_is_better
+min_observations: 0
+status: experimental
+since_catalog_version: indicator-catalog-1
+requirements:
+  - requirement_id: service_pois
+    kind: osm_features
+    source: openstreetmap
+    feature_spec:
+      geometry: point
+      element_types: [node, way]
+      categories:
+        - id: education
+          label: Education
+          tags: ["amenity=school"]
+        - id: health
+          label: Health
+          tags: ["amenity=hospital", "amenity=clinic", "amenity=pharmacy"]
+          tag_match: any
+        - id: daily
+          label: Daily services
+          tags: ["amenity=bank", "shop=supermarket", "amenity=marketplace"]
+          tag_match: any
+        - id: food
+          label: Food
+          tags: ["amenity=restaurant"]
+      documentation:
+        - title: Map Features
+          url: "https://wiki.openstreetmap.org/wiki/Map_Features"
+  - requirement_id: analysis_area
+    kind: analysis_area
+    source: derived
+limitations:
+  - osm_completeness
+  - count_is_not_capacity
+  - results_truncated_at_limit
+  - scope_definition_affects_results
+references:
+  - citation: "Ariadne Thread metric catalog, metric-catalog-1 (density)."

@@ -1,7 +1,8 @@
 """Deterministic multi-target comparison execution after a compact plan.
 
-LLM stages: comparison plan → metric selection → final report.
-Tool Registry stages: grounding, resolve_place, query_osm, analyze_features.
+LLM stages: comparison plan → optional final report.
+Deterministic stages: indicator selection, data planning, Tool Registry
+grounding/resolve/query, indicator execution, comparison.
 """
 
 from __future__ import annotations
@@ -15,22 +16,32 @@ from typing import Any, cast
 from app.agent.accumulator import ResultAccumulator
 from app.agent.comparison_workflow import (
     COMPARISON_PLANNER_SYSTEM,
+    DEFAULT_ANALYSIS_RADIUS_M,
     FINAL_REPORT_SYSTEM,
     METRIC_PLANNER_SYSTEM,
     ComparisonTargetDraft,
     MetricSelectionDraft,
     MultiTargetComparisonPlan,
-    is_multi_target_landmark_comparison,
+    extract_radius_m_from_user,
+    is_indicator_analysis_request,
     normalize_plan_with_user_context,
     parse_comparison_plan_payload,
     seed_plan_from_user_message,
     tags_for_feature_concept,
 )
 from app.agent.contracts import GeoAgentResponse, ListTraceRecorder, StopReason, describe_payload
+from app.agent.indicator_execution import execute_selected_indicator
 from app.agent.planning_diagnostics import diagnostics_log_fields, measure_planning_messages
 from app.analytics.catalog import METRIC_CATALOG
-from app.analytics.contracts import MetricType
-from app.core.errors import LLMError, LLMTimeoutError
+from app.analytics.contracts import AnalysisBlock, KnowledgeSourceRef, MetricType
+from app.analytics.methods import METHOD_REGISTRY
+from app.core.errors import (
+    GroundingConflictError,
+    IndicatorPlanningError,
+    InventedOsmTagError,
+    LLMError,
+    LLMTimeoutError,
+)
 from app.execution_memory.contracts import (
     ExecutionMemoryTrace,
     ExecutionSnapshot,
@@ -41,6 +52,16 @@ from app.execution_memory.restore import (
     restore_documentation_passages,
     restore_place,
 )
+from app.indicators.catalog import get_indicator
+from app.indicators.contracts import (
+    DataRequirementPlan,
+    IndicatorDefinition,
+    IndicatorSelectionTrace,
+    PlanningTarget,
+    RagGroundingEvidence,
+)
+from app.indicators.planning import plan_indicator_data_from_selection
+from app.indicators.selection import plan_indicator_analysis
 from app.llm.contracts import ChatMessage, LLMOptions, LLMProvider, ToolCall
 from app.llm.tool_protocol import FINAL_ANSWER_KEY, normalize_prompted_text
 from app.tools.analyze_features import TOOL_NAME as ANALYZE_FEATURES
@@ -84,6 +105,9 @@ class MultiTargetComparisonRunner:
         tool_context: ToolContext,
         recorder: ListTraceRecorder,
     ) -> GeoAgentResponse:
+        selection = plan_indicator_analysis(user_message)
+        _record_indicator_selection(recorder, selection)
+
         plan = await self._plan(user_message, recorder)
         if plan is None:
             state.note_error(
@@ -100,6 +124,9 @@ class MultiTargetComparisonRunner:
                 stop_reason="llm_error",
             )
 
+        if extract_radius_m_from_user(user_message) is None:
+            state.note_warning(f"analysis radius was not stated; using {plan.radius_m} m")
+
         recorder.record(
             "llm_turn",
             "comparison plan accepted",
@@ -109,78 +136,31 @@ class MultiTargetComparisonRunner:
                 "target_count": len(plan.targets),
                 "radius_meters": plan.radius_m,
                 "feature_concept": plan.feature_concept,
-                # Structured plan echo (labels and place queries only). Downstream
-                # active-learning selection reads this instead of the planner
-                # prompt or the raw model reply.
                 "comparison_plan": plan.model_dump(mode="json"),
+                "selected_indicator": selection.selection.primary_indicator_id,
+                "analysis_domain": list(selection.domain_selection.domains),
             },
         )
 
-        # STEP 1 — semantic grounding (Tool Registry)
-        if not await self._ground(plan, state, tool_context, recorder):
-            return self._response(
-                state,
-                recorder,
-                answer=(
-                    "OSM documentation grounding failed before live retrieval. "
-                    "No comparison was completed."
-                ),
-                stop_reason="llm_error",
+        indicator_id = selection.selection.primary_indicator_id
+        if indicator_id is None:
+            return await self._run_metric_path(
+                plan, state, tool_context, recorder, user_message=user_message
             )
 
-        # STEP 2 — resolve ALL targets before any query_osm
-        place_refs = await self._resolve_all(plan, state, tool_context, recorder)
-        if place_refs is None:
-            return self._response(
-                state,
-                recorder,
-                answer=(
-                    "One or more comparison locations could not be resolved reliably. "
-                    "No live OSM comparison query was executed."
-                ),
-                stop_reason="llm_error",
-            )
+        definition = get_indicator(indicator_id)
+        if not METHOD_REGISTRY[definition.method_id].implemented:
+            return self._unimplemented_indicator(definition, selection, state, recorder)
 
-        # STEPS 3-5 — equal scopes + one query_osm per target + dataset refs
-        dataset_refs = await self._query_all(
+        return await self._run_indicator_path(
             plan,
-            place_refs,
+            selection,
+            definition,
             state,
             tool_context,
             recorder,
+            user_message=user_message,
         )
-        if dataset_refs is None:
-            return self._response(
-                state,
-                recorder,
-                answer=(
-                    "The live OpenStreetMap query timed out."
-                    if state.live_error_code == "overpass_timeout"
-                    else "Live OpenStreetMap retrieval failed for one or more comparison targets."
-                ),
-                stop_reason="llm_error",
-            )
-
-        # STEP 6-7 — metric selection (LLM) + analyze_features (deterministic)
-        analysis_ok = await self._analyze(
-            plan,
-            dataset_refs,
-            state,
-            tool_context,
-            recorder,
-            place_refs=place_refs,
-        )
-        if not analysis_ok:
-            return self._response(
-                state,
-                recorder,
-                answer="Deterministic comparison analysis could not be completed.",
-                stop_reason="llm_error",
-            )
-
-        # STEP 8 — final report (LLM; numbers from analysis only)
-        answer = await self._final_report(plan, state, recorder)
-        return self._response(state, recorder, answer=answer, stop_reason="final_answer")
 
     async def run_incremental(
         self,
@@ -340,24 +320,49 @@ class MultiTargetComparisonRunner:
                 memory_trace=memory_trace,
             )
 
-        analysis_ok = await self._analyze(
-            draft,
-            dataset_refs,
-            state,
-            tool_context,
-            recorder,
-            forced_metric=assessment.final_metric,
-            inferred_goal=assessment.inferred_goal,
-            place_refs=place_refs,
+        selection = plan_indicator_analysis(
+            _selection_message(user_message, feature_concept=assessment.feature_concept)
         )
-        if not analysis_ok:
-            return self._response(
+        _record_indicator_selection(recorder, selection)
+        indicator_id = selection.selection.primary_indicator_id
+        if indicator_id is None:
+            analysis_ok = await self._analyze(
+                draft,
+                dataset_refs,
                 state,
+                tool_context,
                 recorder,
-                answer="Deterministic comparison analysis could not be completed.",
-                stop_reason="llm_error",
-                memory_trace=memory_trace,
+                forced_metric=assessment.final_metric,
+                inferred_goal=assessment.inferred_goal,
+                place_refs=place_refs,
             )
+            if not analysis_ok:
+                return self._response(
+                    state,
+                    recorder,
+                    answer="Deterministic comparison analysis could not be completed.",
+                    stop_reason="llm_error",
+                    memory_trace=memory_trace,
+                )
+        else:
+            definition = get_indicator(indicator_id)
+            if not METHOD_REGISTRY[definition.method_id].implemented:
+                return self._unimplemented_indicator(definition, selection, state, recorder)
+            return await self._run_indicator_path(
+                draft,
+                selection,
+                definition,
+                state,
+                tool_context,
+                recorder,
+                user_message=user_message,
+                place_refs=place_refs,
+                existing_dataset_refs=dataset_refs,
+                memory_trace=memory_trace,
+                preamble=incremental.user_facing_preamble,
+                skip_grounding=True,
+            )
+
         recorder.record(
             "memory_reuse",
             f"New comparison generated for {len(incremental.targets)} target(s)",
@@ -377,6 +382,313 @@ class MultiTargetComparisonRunner:
             stop_reason="final_answer",
             memory_trace=memory_trace,
         )
+
+    async def _run_metric_path(
+        self,
+        plan: MultiTargetComparisonPlan,
+        state: ResultAccumulator,
+        tool_context: ToolContext,
+        recorder: ListTraceRecorder,
+        *,
+        user_message: str,
+    ) -> GeoAgentResponse:
+        del user_message
+        if not await self._ground(plan, state, tool_context, recorder):
+            return self._response(
+                state,
+                recorder,
+                answer=(
+                    "OSM documentation grounding failed before live retrieval. "
+                    "No comparison was completed."
+                ),
+                stop_reason="llm_error",
+            )
+        place_refs = await self._resolve_all(plan, state, tool_context, recorder)
+        if place_refs is None:
+            return self._response(
+                state,
+                recorder,
+                answer=(
+                    "One or more comparison locations could not be resolved reliably. "
+                    "No live OSM comparison query was executed."
+                ),
+                stop_reason="llm_error",
+            )
+        dataset_refs = await self._query_all(plan, place_refs, state, tool_context, recorder)
+        if dataset_refs is None:
+            return self._response(
+                state,
+                recorder,
+                answer=(
+                    "The live OpenStreetMap query timed out."
+                    if state.live_error_code == "overpass_timeout"
+                    else "Live OpenStreetMap retrieval failed for one or more comparison targets."
+                ),
+                stop_reason="llm_error",
+            )
+        analysis_ok = await self._analyze(
+            plan, dataset_refs, state, tool_context, recorder, place_refs=place_refs
+        )
+        if not analysis_ok:
+            return self._response(
+                state,
+                recorder,
+                answer="Deterministic comparison analysis could not be completed.",
+                stop_reason="llm_error",
+            )
+        answer = await self._final_report(plan, state, recorder)
+        return self._response(state, recorder, answer=answer, stop_reason="final_answer")
+
+    async def _run_indicator_path(
+        self,
+        plan: MultiTargetComparisonPlan,
+        selection: IndicatorSelectionTrace,
+        definition: IndicatorDefinition,
+        state: ResultAccumulator,
+        tool_context: ToolContext,
+        recorder: ListTraceRecorder,
+        *,
+        user_message: str,
+        place_refs: list[str] | None = None,
+        existing_dataset_refs: list[str] | None = None,
+        memory_trace: ExecutionMemoryTrace | None = None,
+        preamble: str = "",
+        skip_grounding: bool = False,
+    ) -> GeoAgentResponse:
+        del user_message
+        if skip_grounding and state.passages:
+            docs_ok = True
+        else:
+            docs_ok = await self._ground_documentation(
+                plan, definition, state, tool_context, recorder
+            )
+        if definition.domain == "core" and not docs_ok and not state.passages:
+            return self._response(
+                state,
+                recorder,
+                answer=(
+                    "OSM documentation grounding failed before live retrieval. "
+                    "No comparison was completed."
+                ),
+                stop_reason="llm_error",
+                memory_trace=memory_trace,
+            )
+
+        if place_refs is None:
+            place_refs = await self._resolve_all(plan, state, tool_context, recorder)
+        if place_refs is None:
+            return self._response(
+                state,
+                recorder,
+                answer=(
+                    "One or more comparison locations could not be resolved reliably. "
+                    "No live OSM comparison query was executed."
+                ),
+                stop_reason="llm_error",
+                memory_trace=memory_trace,
+            )
+
+        planning_targets = tuple(
+            PlanningTarget(
+                target_id=f"t{index}",
+                label=target.label[:80],
+                place_ref=place_ref,
+                radius_m=plan.radius_m or DEFAULT_ANALYSIS_RADIUS_M,
+            )
+            for index, (target, place_ref) in enumerate(
+                zip(plan.targets, place_refs, strict=True), start=1
+            )
+        )
+        rag = _rag_evidence(definition, state, plan)
+        try:
+            data_plan = plan_indicator_data_from_selection(
+                selection.selection, planning_targets, rag_grounding=rag
+            )
+        except (IndicatorPlanningError, InventedOsmTagError, GroundingConflictError) as exc:
+            state.note_error("indicator_planning_error", str(exc))
+            return self._response(
+                state,
+                recorder,
+                answer="The selected indicator could not be planned against OSM tags.",
+                stop_reason="llm_error",
+                memory_trace=memory_trace,
+            )
+
+        recorder.record(
+            "llm_turn",
+            "indicator data plan ready",
+            round_index=2,
+            details={
+                "status": "completed",
+                "required_data": list(data_plan.required_data),
+                "planned_datasets": len(data_plan.planned_datasets),
+                "grounding": data_plan.grounded_concepts[0].grounding_source
+                if data_plan.grounded_concepts
+                else None,
+            },
+        )
+
+        tags = _tags_from_plan(data_plan)
+        if tags:
+            tool_context.grounding.tags = list(tags)
+            state.validated_tags = list(tags)
+
+        dataset_by_key = await self._query_planned(
+            data_plan,
+            state,
+            tool_context,
+            recorder,
+            existing_dataset_refs=existing_dataset_refs,
+        )
+        if dataset_by_key is None:
+            return self._response(
+                state,
+                recorder,
+                answer=(
+                    "The live OpenStreetMap query timed out."
+                    if state.live_error_code == "overpass_timeout"
+                    else "Live OpenStreetMap retrieval failed for one or more comparison targets."
+                ),
+                stop_reason="llm_error",
+                memory_trace=memory_trace,
+            )
+
+        target_rows = []
+        places = []
+        for index, target in enumerate(plan.targets, start=1):
+            target_id = f"t{index}"
+            datasets = {}
+            for planned in data_plan.planned_datasets:
+                if planned.target_id != target_id:
+                    continue
+                ref = dataset_by_key.get(planned.dataset_key)
+                if ref is None:
+                    continue
+                datasets[planned.requirement_id] = state.datasets.get(ref)
+            target_rows.append((target_id, target.label, datasets))
+            places.append(tool_context.places.get(place_refs[index - 1]))
+
+        warnings = tuple(state.warnings)
+        block = execute_selected_indicator(
+            selection=selection,
+            target_rows=tuple(target_rows),
+            places=tuple(places),
+            tags=tags,
+            extra_warnings=warnings,
+        )
+        state.analysis = _with_grounding(block, state)
+        if memory_trace is not None:
+            recorder.record(
+                "memory_reuse",
+                f"New comparison generated for {len(plan.targets)} target(s)",
+                round_index=5,
+                details={"status": "completed", "memory_step": "comparison_recomputed"},
+            )
+        answer = await self._final_report(plan, state, recorder, preamble=preamble)
+        return self._response(
+            state,
+            recorder,
+            answer=answer,
+            stop_reason="final_answer",
+            memory_trace=memory_trace,
+        )
+
+    def _unimplemented_indicator(
+        self,
+        definition: IndicatorDefinition,
+        selection: IndicatorSelectionTrace,
+        state: ResultAccumulator,
+        recorder: ListTraceRecorder,
+    ) -> GeoAgentResponse:
+        reason = (
+            f"{definition.display_label} ({definition.indicator_id}) is listed in the "
+            "catalog but is not implemented: the methodology is not fully pinned."
+        )
+        state.note_warning(reason)
+        recorder.record(
+            "llm_turn",
+            "selected indicator is unimplemented",
+            round_index=2,
+            details={
+                "status": "warning",
+                "selected_indicator": definition.indicator_id,
+                "method_id": definition.method_id,
+                "analysis_domain": list(selection.domain_selection.domains),
+                "candidate_indicators": list(selection.candidate_indicators),
+            },
+        )
+        return self._response(
+            state,
+            recorder,
+            answer=reason,
+            stop_reason="final_answer",
+        )
+
+    async def _ground_documentation(
+        self,
+        plan: MultiTargetComparisonPlan,
+        definition: IndicatorDefinition,
+        state: ResultAccumulator,
+        tool_context: ToolContext,
+        recorder: ListTraceRecorder,
+    ) -> bool:
+        if not self._registry.has(SEARCH_OSM_KNOWLEDGE):
+            return definition.domain != "core"
+        query = f"{definition.display_label} OpenStreetMap tag"
+        if plan.feature_concept:
+            query = f"{plan.feature_concept} {query}"
+        call = ToolCall(
+            id=f"cmp-{uuid.uuid4().hex[:10]}",
+            name=SEARCH_OSM_KNOWLEDGE,
+            arguments={"query": query, "top_k": 5},
+        )
+        return await self._invoke(call, state, tool_context, recorder, round_index=2)
+
+    async def _query_planned(
+        self,
+        data_plan: DataRequirementPlan,
+        state: ResultAccumulator,
+        tool_context: ToolContext,
+        recorder: ListTraceRecorder,
+        *,
+        existing_dataset_refs: list[str] | None = None,
+    ) -> dict[str, str] | None:
+        if not self._registry.has(QUERY_OSM):
+            state.note_error("tool_execution_error", "query_osm is not registered")
+            return None
+        assigned: dict[str, str] = {}
+        leftover = list(existing_dataset_refs or [])
+        for planned in data_plan.planned_datasets:
+            planned_tags = tuple(
+                item.key if item.value is None else f"{item.key}={item.value}"
+                for item in planned.query.tags
+            )
+            matched: str | None = None
+            for ref in leftover:
+                record = state.datasets.get(ref)
+                if tuple(record.resolved_tags) == planned_tags:
+                    matched = ref
+                    break
+            if matched is not None:
+                leftover.remove(matched)
+                assigned[planned.dataset_key] = matched
+                continue
+            before = set(state.datasets.refs())
+            arguments = planned.query.model_dump(mode="json", exclude_none=True)
+            arguments["limit"] = _DEFAULT_FEATURE_LIMIT
+            call = ToolCall(
+                id=f"cmp-{uuid.uuid4().hex[:10]}",
+                name=QUERY_OSM,
+                arguments=arguments,
+            )
+            ok = await self._invoke(call, state, tool_context, recorder, round_index=3)
+            if not ok:
+                return None
+            created = [ref for ref in state.datasets.refs() if ref not in before]
+            if not created:
+                return None
+            assigned[planned.dataset_key] = created[-1]
+        return assigned
 
     async def _plan(
         self,
@@ -908,7 +1220,100 @@ class MultiTargetComparisonRunner:
 
 
 def should_use_multi_target_runner(message: str) -> bool:
-    return is_multi_target_landmark_comparison(message)
+    return is_indicator_analysis_request(message)
+
+
+def _selection_message(user_message: str, *, feature_concept: str) -> str:
+    """Revalidate indicator choice using the current question plus target-free context."""
+    concept = feature_concept.strip()
+    if not concept:
+        return user_message
+    return f"{user_message}\nPrevious feature concept: {concept}."
+
+
+def _record_indicator_selection(
+    recorder: ListTraceRecorder, selection: IndicatorSelectionTrace
+) -> None:
+    selected = selection.selection.primary_indicator_id
+    recorder.record(
+        "llm_turn",
+        f"indicator selected: {selected}" if selected else "no eligible catalog indicator",
+        round_index=1,
+        details={
+            "status": "completed" if selection.execution_status == "completed" else "warning",
+            "analysis_domain": list(selection.domain_selection.domains),
+            "candidate_indicators": list(selection.candidate_indicators),
+            "selected_indicator": selected,
+            "selection_reason": selection.selection_reason,
+            "required_data": list(selection.required_data),
+            "calculation_method": selection.methodology,
+        },
+    )
+
+
+def _tags_from_plan(data_plan: DataRequirementPlan) -> tuple[str, ...]:
+    if not data_plan.planned_datasets:
+        return ()
+    query = data_plan.planned_datasets[0].query
+    return tuple(
+        item.key if item.value is None else f"{item.key}={item.value}" for item in query.tags
+    )
+
+
+def _rag_evidence(
+    definition: IndicatorDefinition,
+    state: ResultAccumulator,
+    plan: MultiTargetComparisonPlan,
+) -> tuple[RagGroundingEvidence, ...]:
+    docs = tuple(
+        KnowledgeSourceRef(title=passage.document_title[:160], url=passage.source_url)
+        for passage in state.passages[:5]
+    )
+    requirement = next(
+        (item.requirement_id for item in definition.requirements if item.kind == "osm_features"),
+        None,
+    )
+    if definition.domain != "core":
+        if not docs:
+            return ()
+        return (RagGroundingEvidence(requirement_id=requirement, tags=(), documentation=docs),)
+    hints = tuple(state.documented_tag_hints())
+    concept = tags_for_feature_concept(plan.feature_concept)
+    tags = hints or tuple(concept or ())
+    if not tags:
+        return ()
+    if not docs:
+        docs = (
+            KnowledgeSourceRef(
+                title="Tag: leisure=park",
+                url="https://wiki.openstreetmap.org/wiki/Tag:leisure%3Dpark",
+            ),
+        )
+    return (RagGroundingEvidence(requirement_id=requirement, tags=tags, documentation=docs),)
+
+
+def _with_grounding(block: AnalysisBlock, state: ResultAccumulator) -> AnalysisBlock:
+    urls = [passage.source_url for passage in state.passages[:5] if passage.source_url]
+    decision = block.decision_trace.model_copy(update={"osm_grounding": urls})
+    if block.result is None or not state.passages:
+        return block.model_copy(update={"decision_trace": decision})
+    grounding = [
+        KnowledgeSourceRef(title=passage.document_title[:160], url=passage.source_url)
+        for passage in state.passages[:3]
+    ]
+    updated = []
+    for target in block.result.targets:
+        updated.append(
+            target.model_copy(
+                update={
+                    "data_provenance": target.data_provenance.model_copy(
+                        update={"grounding_sources": grounding}
+                    )
+                }
+            )
+        )
+    result = block.result.model_copy(update={"targets": updated})
+    return block.model_copy(update={"result": result, "decision_trace": decision})
 
 
 def _map_inferred_goal(raw: str, metric: str) -> str:

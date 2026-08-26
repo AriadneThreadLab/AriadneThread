@@ -51,10 +51,14 @@ asyncio.wait_for(agent.run, AGENT_REQUEST_TIMEOUT_SECONDS)
  ↓
 Ollama turn (prompted JSON tool protocol by default)
  ↓
+Indicator Catalog (domain → candidates → selected indicator)
+ ↓
 Tool Registry validates name + Pydantic args
  ↓
 search_osm_knowledge and/or resolve_place and/or query_osm
 and/or analyze_features (state-aware model-facing eligibility)
+ ↓
+deterministic indicator execution (catalog method, never model arithmetic)
  ↓
 compact observation → model (never full GeoJSON)
 structured payload → ResultAccumulator
@@ -301,10 +305,10 @@ Implemented in `app/analytics/`. Governing rule:
 
 Flow:
 
-1. `query_osm` registers a request-scoped `dataset_ref` (`osm_result_N`).
-2. The model proposes an `AnalysisPlan` (closed metric catalog + rule IDs).
-3. `analyze_features` validates feasibility; at most one structured re-plan.
-4. `SpatialAnalyticsEngine` / `ComparisonEngine` compute numbers (stdlib geodesy).
+1. The Indicator Catalog selects a domain, candidates, and one indicator.
+2. `query_osm` registers a request-scoped `dataset_ref` (`osm_result_N`).
+3. Deterministic indicator execution computes values (never model arithmetic).
+4. `analyze_features` remains for the metric-catalog fallback path.
 5. Optional `analysis` on `AgentQueryResponse`; UI shows Comparison Report and
    Analysis Method only when present.
 

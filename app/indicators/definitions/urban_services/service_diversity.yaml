@@ -1,0 +1,46 @@
+indicator_id: service_diversity
+domain: urban_services
+display_label: Service diversity
+purpose: Evenness of urban-service categories present in the analysis area.
+goals: [variability]
+method_id: shannon_entropy
+formula: "H = -sum(p_i * ln(p_i)) over service categories i"
+parameters:
+  log_base: 2.718281828459045
+unit: nats
+display_precision: 2
+direction: higher_is_better
+min_observations: 2
+status: experimental
+since_catalog_version: indicator-catalog-1
+requirements:
+  - requirement_id: service_pois
+    kind: osm_features
+    source: openstreetmap
+    feature_spec:
+      geometry: any
+      element_types: [node, way]
+      categories:
+        - id: education
+          label: Education
+          tags: ["amenity=school"]
+        - id: health
+          label: Health
+          tags: ["amenity=hospital", "amenity=clinic", "amenity=pharmacy"]
+          tag_match: any
+        - id: daily
+          label: Daily services
+          tags: ["amenity=bank", "shop=supermarket", "amenity=marketplace"]
+          tag_match: any
+        - id: food
+          label: Food
+          tags: ["amenity=restaurant"]
+      documentation:
+        - title: Map Features
+          url: "https://wiki.openstreetmap.org/wiki/Map_Features"
+limitations:
+  - osm_completeness
+  - nonstandard_property_values
+  - count_is_not_capacity
+references:
+  - citation: "Shannon, C. E. (1948). A mathematical theory of communication. Bell System Technical Journal, 27, 379–423."

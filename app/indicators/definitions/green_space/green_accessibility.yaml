@@ -1,0 +1,48 @@
+indicator_id: green_accessibility
+domain: green_space
+display_label: Green accessibility
+purpose: Distance-weighted access to mapped green space from a reference location.
+goals: [accessibility]
+method_id: distance_decay_sum
+formula: "sum(area_i * exp(-decay_beta * distance_i)) from the reference point"
+parameters:
+  decay_beta: 0.001
+unit: m2_decay_weighted
+display_precision: 1
+direction: higher_is_better
+min_observations: 1
+status: experimental
+since_catalog_version: indicator-catalog-1
+requirements:
+  - requirement_id: green_polygons
+    kind: osm_features
+    source: openstreetmap
+    feature_spec:
+      geometry: polygon
+      element_types: [way, relation]
+      categories:
+        - id: park
+          label: Park
+          tags: ["leisure=park"]
+        - id: garden
+          label: Garden
+          tags: ["leisure=garden"]
+        - id: grass
+          label: Grass
+          tags: ["landuse=grass"]
+        - id: wood
+          label: Wood
+          tags: ["natural=wood"]
+      documentation:
+        - title: "Tag: leisure=park"
+          url: "https://wiki.openstreetmap.org/wiki/Tag:leisure%3Dpark"
+  - requirement_id: reference_point
+    kind: reference_point
+    source: user_input
+limitations:
+  - osm_completeness
+  - euclidean_not_route
+  - single_reference_point
+  - polygon_quality_varies
+references:
+  - citation: "Hansen, W. G. (1959). How accessibility shapes land use. Journal of the American Institute of Planners, 25(2), 73–76."

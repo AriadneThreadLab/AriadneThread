@@ -116,7 +116,7 @@ export function labelForTraceEvent(event, tool) {
     case "llm_turn":
       return "Model planning turn";
     case "memory_reuse":
-      return "Execution memory decision";
+      return "Follow-up analysis step";
     case "protocol_repair":
       return "Prompt format corrected";
     case "tool_call":

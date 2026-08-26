@@ -1,0 +1,51 @@
+indicator_id: green_space_ratio
+domain: green_space
+display_label: Green space ratio
+purpose: Share of the analysis area covered by mapped green space.
+goals: [coverage]
+method_id: area_share
+formula: "sum(area(green_polygons)) / area(analysis_area) * 100"
+unit: percent
+display_precision: 1
+direction: higher_is_better
+min_observations: 1
+status: experimental
+since_catalog_version: indicator-catalog-1
+requirements:
+  - requirement_id: green_polygons
+    kind: osm_features
+    source: openstreetmap
+    feature_spec:
+      geometry: polygon
+      element_types: [way, relation]
+      categories:
+        - id: park
+          label: Park
+          tags: ["leisure=park"]
+        - id: garden
+          label: Garden
+          tags: ["leisure=garden"]
+        - id: grass
+          label: Grass
+          tags: ["landuse=grass"]
+        - id: wood
+          label: Wood
+          tags: ["natural=wood"]
+      documentation:
+        - title: "Tag: leisure=park"
+          url: "https://wiki.openstreetmap.org/wiki/Tag:leisure%3Dpark"
+        - title: "Tag: landuse=grass"
+          url: "https://wiki.openstreetmap.org/wiki/Tag:landuse%3Dgrass"
+        - title: "Tag: natural=wood"
+          url: "https://wiki.openstreetmap.org/wiki/Tag:natural%3Dwood"
+  - requirement_id: analysis_area
+    kind: analysis_area
+    source: derived
+limitations:
+  - osm_completeness
+  - polygon_quality_varies
+  - overlapping_polygons
+  - scope_definition_affects_results
+references:
+  - citation: "WHO Regional Office for Europe (2016). Urban green spaces and health."
+    url: "https://www.who.int/europe/publications/i/item/WHO-EURO-2016-3352-43111-60341"

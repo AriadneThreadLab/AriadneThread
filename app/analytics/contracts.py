@@ -513,6 +513,14 @@ class AnalysisDecisionTrace(BaseModel):
     final_supporting_metrics: list[MetricType] = Field(default_factory=list)
     ruleset_version: str
     metric_catalog_version: str
+    selected_indicator_id: str | None = None
+    analysis_domain: str | None = None
+    candidate_indicators: list[str] = Field(default_factory=list)
+    indicator_selection_reason: str | None = None
+    required_data: list[str] = Field(default_factory=list)
+    calculation_method: str | None = None
+    osm_grounding: list[str] = Field(default_factory=list)
+    indicator_catalog_version: str | None = None
 
 
 class AnalysisBlock(BaseModel):

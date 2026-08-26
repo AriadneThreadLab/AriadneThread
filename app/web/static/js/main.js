@@ -21,7 +21,8 @@ import {
 
 const EXAMPLE_QUERIES = [
   "Find public parks around Istanbul Technical University. Return at most 20 features.",
-  "Compare green spaces within 2 km of Istanbul Technical University and Boğaziçi University. Choose the best metric, compare them, and return the green-space features for both areas.",
+  "Which university has a larger proportion of green space within 2 km: Istanbul Technical University or Boğaziçi University?",
+  "Compare road density around Istanbul Technical University and Boğaziçi University.",
   "Add Yıldız Technical University to the previous comparison.",
 ];
 
@@ -613,7 +614,22 @@ function renderAnalysis(analysis, memory) {
   }
 
   const trace = analysis.decision_trace || {};
-  const primaryMetric = trace.final_primary_metric || "—";
+  const selectedIndicator =
+    trace.selected_indicator_id || trace.final_primary_metric || "—";
+  const domain = trace.analysis_domain || "—";
+  const candidates = Array.isArray(trace.candidate_indicators)
+    ? trace.candidate_indicators.join(", ")
+    : "—";
+  const why = trace.indicator_selection_reason || (() => {
+    const lines = [];
+    for (const sel of Array.isArray(trace.metric_selections) ? trace.metric_selections : []) {
+      if (sel.final_status !== "executed") continue;
+      for (const evidence of Array.isArray(sel.evidence) ? sel.evidence : []) {
+        if (evidence.statement) lines.push(evidence.statement);
+      }
+    }
+    return lines.join(" ") || "—";
+  })();
   const rules = [];
   for (const sel of Array.isArray(trace.metric_selections) ? trace.metric_selections : []) {
     if (sel.final_status !== "executed" && sel.final_status !== "superseded") continue;
@@ -621,13 +637,6 @@ function renderAnalysis(analysis, memory) {
       if (evidence.rule_id && !rules.includes(evidence.rule_id)) {
         rules.push(evidence.rule_id);
       }
-    }
-  }
-  const why = [];
-  for (const sel of Array.isArray(trace.metric_selections) ? trace.metric_selections : []) {
-    if (sel.metric !== primaryMetric || sel.final_status !== "executed") continue;
-    for (const evidence of Array.isArray(sel.evidence) ? sel.evidence : []) {
-      if (evidence.statement) why.push(evidence.statement);
     }
   }
 
@@ -654,34 +663,33 @@ function renderAnalysis(analysis, memory) {
   }
 
   const methodRows = [
+    ["Analysis Domain", domain],
+    ["Candidate Indicators", candidates],
+    ["Selected Indicator", selectedIndicator],
+    ["Why Selected", typeof why === "string" ? why : "—"],
+    ["Required Data", Array.isArray(trace.required_data) ? trace.required_data.join(", ") || "—" : "—"],
+    [
+      "OSM Grounding",
+      Array.isArray(trace.osm_grounding) && trace.osm_grounding.length
+        ? trace.osm_grounding.join("\n")
+        : "—",
+    ],
+    ["Calculation Method", trace.calculation_method || "—"],
     ["Analysis Goal", trace.inferred_comparison_goal || analysis.plan?.comparison_goal || "—"],
-    ["Primary Indicator", primaryMetric],
-    ["Why This Indicator?", why.join(" ") || "—"],
     ["Selection Rules", rules.join(" · ") || "—"],
     ["Analysis Scope", scope],
     ["Data", dataLine],
     ["Observations", observationLines.join("\n") || "—"],
     [
       "Catalog / Ruleset",
-      `${trace.metric_catalog_version || "—"} · ${trace.ruleset_version || "—"}`,
+      `${trace.indicator_catalog_version || trace.metric_catalog_version || "—"} · ${trace.ruleset_version || "—"}`,
     ],
   ];
 
   if (memory && memory.memory_reuse_attempted) {
-    methodRows.push(["Follow-up type", memory.follow_up_type || "—"]);
-    methodRows.push(["Reuse decision", memory.memory_reuse_decision || "—"]);
-    if (memory.new_targets && memory.new_targets.length) {
-      methodRows.push(["Targets added", memory.new_targets.join(", ")]);
-    }
-    const reused = (memory.reused_targets || []).length;
-    const refreshed = (memory.refreshed_targets || []).length;
     methodRows.push([
-      "Datasets",
-      `${reused} reused · ${refreshed} refreshed · ${(memory.new_targets || []).length} new`,
-    ]);
-    methodRows.push([
-      "Metric revalidation",
-      `${memory.previous_metric || "—"} → ${memory.metric_revalidation_status || "—"} (${memory.final_metric || "—"})`,
+      "Follow-up",
+      "This question revalidated the selected indicator against the current targets.",
     ]);
   }
 
@@ -714,9 +722,21 @@ function renderAnalysis(analysis, memory) {
     JSON.stringify(
       {
         status: analysis.status,
-        decision_trace: trace,
+        decision_trace: {
+          analysis_domain: trace.analysis_domain || null,
+          candidate_indicators: trace.candidate_indicators || [],
+          selected_indicator_id: trace.selected_indicator_id || null,
+          indicator_selection_reason: trace.indicator_selection_reason || null,
+          required_data: trace.required_data || [],
+          osm_grounding: trace.osm_grounding || [],
+          calculation_method: trace.calculation_method || null,
+          inferred_comparison_goal: trace.inferred_comparison_goal || null,
+          final_primary_metric: trace.final_primary_metric || null,
+          indicator_catalog_version: trace.indicator_catalog_version || null,
+          metric_catalog_version: trace.metric_catalog_version || null,
+          ruleset_version: trace.ruleset_version || null,
+        },
         comparison: analysis.comparison || null,
-        execution_memory: memory || null,
       },
       null,
       2,

@@ -1,0 +1,45 @@
+indicator_id: road_accessibility
+domain: mobility
+display_label: Road accessibility
+purpose: Geodesic distance from a reference location to the nearest mapped road.
+goals: [accessibility]
+method_id: nearest_distance
+formula: "min distance(reference_point, highway features)"
+unit: m
+display_precision: 0
+direction: lower_is_better
+min_observations: 1
+status: experimental
+since_catalog_version: indicator-catalog-1
+requirements:
+  - requirement_id: highway_features
+    kind: osm_features
+    source: openstreetmap
+    feature_spec:
+      geometry: line
+      element_types: [way]
+      categories:
+        - id: carriageway
+          label: Carriageway
+          tags:
+            - "highway=motorway"
+            - "highway=trunk"
+            - "highway=primary"
+            - "highway=secondary"
+            - "highway=tertiary"
+            - "highway=unclassified"
+            - "highway=residential"
+            - "highway=living_street"
+          tag_match: any
+      documentation:
+        - title: Map Features
+          url: "https://wiki.openstreetmap.org/wiki/Map_Features"
+  - requirement_id: reference_point
+    kind: reference_point
+    source: user_input
+limitations:
+  - osm_completeness
+  - euclidean_not_route
+  - single_reference_point
+references:
+  - citation: "Ariadne Thread metric catalog, metric-catalog-1 (nearest_distance). Distances are geodesic, not routed."

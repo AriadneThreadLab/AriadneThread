@@ -278,3 +278,67 @@ class DatasetExportError(ActiveLearningError):
     """A curated dataset could not be exported."""
 
     code = "active_learning_dataset_export_error"
+
+
+class IndicatorCatalogError(GeoAgentError):
+    """An indicator definition failed catalog validation."""
+
+    code = "indicator_catalog_error"
+
+
+class UnknownIndicatorError(IndicatorCatalogError):
+    """The requested indicator_id is not in the catalog."""
+
+    code = "unknown_indicator"
+
+
+class IndicatorComputeError(GeoAgentError):
+    """An indicator executor could not run on the supplied datasets."""
+
+    code = "indicator_compute_error"
+
+
+class IndicatorPlanningError(GeoAgentError):
+    """OSM data-requirement planning failed before any Overpass call."""
+
+    code = "indicator_planning_error"
+
+    def __init__(self, message: str, *, reason: str) -> None:
+        super().__init__(message)
+        self.reason = reason
+
+
+class UnsupportedDataRequirementError(IndicatorPlanningError):
+    """A requirement is not an OSM / place / derived-area input this planner supports."""
+
+    code = "unsupported_data_requirement"
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message, reason="unsupported_requirement")
+
+
+class InventedOsmTagError(IndicatorPlanningError):
+    """The model (or ungrounded input) tried to supply OSM tags."""
+
+    code = "invented_osm_tag"
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message, reason="invented_osm_tag")
+
+
+class GroundingConflictError(IndicatorPlanningError):
+    """RAG-proposed tags disagree with the catalog's declared feature set."""
+
+    code = "grounding_conflict"
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message, reason="grounding_conflict")
+
+
+class RequirementBudgetExceededError(IndicatorPlanningError):
+    """Unique OSM retrievals would exceed DatasetRegistry.MAX_DATASETS."""
+
+    code = "requirement_budget_exceeded"
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message, reason="requirement_budget_exceeded")

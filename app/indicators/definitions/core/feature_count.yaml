@@ -1,0 +1,32 @@
+# Core generic indicator. Tags are filled at query time from RAG grounding
+# or an explicit user tag — the only catalog entry allowed to omit tag literals.
+indicator_id: feature_count
+domain: core
+display_label: Feature count
+purpose: How many matching features exist in the analysis scope.
+goals: [abundance]
+method_id: count
+formula: "n(features)"
+unit: features
+display_precision: 0
+direction: higher_is_better
+min_observations: 0
+status: stable
+since_catalog_version: indicator-catalog-1
+requirements:
+  - requirement_id: subject_features
+    kind: osm_features
+    source: openstreetmap
+    feature_spec:
+      geometry: any
+      element_types: [node, way, relation]
+      categories:
+        - id: subject
+          label: Subject features
+          tags: []
+limitations:
+  - osm_completeness
+  - count_is_not_capacity
+  - results_truncated_at_limit
+references:
+  - citation: "Ariadne Thread metric catalog, metric-catalog-1 (count)."

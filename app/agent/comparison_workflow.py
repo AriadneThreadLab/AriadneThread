@@ -13,18 +13,38 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 _COMPARE_HINT = re.compile(
-    r"\b(compare|comparison|which (?:area|one)|more parks|denser|better access)\b",
+    r"\b("
+    r"compare|comparison|which (?:area|one|university|campus)|"
+    r"more parks|denser|density|better access|proportion|ratio|"
+    r"diversity|coverage|closer to"
+    r")\b",
     re.IGNORECASE,
 )
 _RADIUS_HINT = re.compile(
     r"\bwithin\b.{0,40}\b(\d+(?:\.\d+)?)\s*(km|kilometers?|kilometres?|m|meters?|metres?)\b",
     re.IGNORECASE,
 )
+_RADIUS_ANY = re.compile(
+    r"\b(\d+(?:\.\d+)?)\s*(km|kilometers?|kilometres?|m|meters?|metres?)\b",
+    re.IGNORECASE,
+)
 _TEHRAN_HINT = re.compile(r"\b(tehran|iran)\b", re.IGNORECASE)
-_GEO_CONTEXT = re.compile(r"(,\s*(tehran|iran)\b|\biran\b)", re.IGNORECASE)
-_LEADING_THE = re.compile(r"^the\s+", re.IGNORECASE)
+_ISTANBUL_HINT = re.compile(
+    r"\b(istanbul|t[uü]rkiye|turkey|boğaziçi|bogazici)\b",
+    re.IGNORECASE,
+)
 _GREEN_SPACE_HINT = re.compile(r"green[\s-]?spaces?", re.IGNORECASE)
 _PARK_HINT = re.compile(r"\bparks?\b", re.IGNORECASE)
+_UNIVERSITY_NAME = re.compile(
+    r"("
+    r"[A-ZÀ-ÖØ-Þ][\w'.+-]*(?:\s+[A-ZÀ-ÖØ-Þ][\w'.+-]*)*\s+University"
+    r"(?:\s+of\s+[A-ZÀ-ÖØ-Þ][\w'.+-]*)?"
+    r"|"
+    r"University\s+of\s+[A-ZÀ-ÖØ-Þ][\w'.+-]*(?:\s+[A-ZÀ-ÖØ-Þ][\w'.+-]*)*"
+    r")",
+)
+
+DEFAULT_ANALYSIS_RADIUS_M = 2000
 
 #: Explicit OSM tags for "green space" comparison queries. Queried as a union
 #: (tag_match=any), not AND. Parks-only requests stay leisure=park.
@@ -58,7 +78,7 @@ class MultiTargetComparisonPlan(BaseModel):
 
     analysis_type: Literal["comparison"] = "comparison"
     feature_concept: str = Field(min_length=2, max_length=120)
-    targets: list[ComparisonTargetDraft] = Field(min_length=2, max_length=4)
+    targets: list[ComparisonTargetDraft] = Field(min_length=1, max_length=4)
     radius_m: int = Field(gt=0, le=50_000)
     comparison_goal: str = Field(min_length=2, max_length=240)
 
@@ -116,17 +136,18 @@ FINAL_REPORT_SYSTEM = (
 
 
 def is_multi_target_landmark_comparison(message: str) -> bool:
-    """Heuristic: analytical compare + distance buffer + multiple landmarks."""
+    """Heuristic: analytical compare + multiple landmarks (radius optional)."""
     text = message.strip()
     if len(text) < 20:
         return False
     if not _COMPARE_HINT.search(text):
         return False
-    if _RADIUS_HINT.search(text) is None:
+    labels = extract_landmark_labels(text)
+    if len(labels) >= 2:
+        return True
+    joined = " or " in text.lower() or " and " in text.lower()
+    if not joined:
         return False
-    if " and " not in text.lower():
-        return False
-    # City-only place queries (no landmark buffer) stay on the simple path.
     return bool(
         re.search(
             r"\b(university|college|campus|square|station|hospital|museum|airport)\b",
@@ -137,8 +158,17 @@ def is_multi_target_landmark_comparison(message: str) -> bool:
     )
 
 
+def is_indicator_analysis_request(message: str) -> bool:
+    """Whether the comparison/indicator executor should handle this question."""
+    if is_multi_target_landmark_comparison(message):
+        return True
+    if not _COMPARE_HINT.search(message):
+        return False
+    return len(extract_landmark_labels(message)) >= 1
+
+
 def extract_radius_m_from_user(message: str) -> int | None:
-    match = _RADIUS_HINT.search(message)
+    match = _RADIUS_HINT.search(message) or _RADIUS_ANY.search(message)
     if match is None:
         return None
     value = float(match.group(1))
@@ -149,27 +179,28 @@ def extract_radius_m_from_user(message: str) -> int | None:
 
 
 def extract_landmark_labels(message: str) -> tuple[str, ...]:
-    """Best-effort split of landmark names after 'within … of'."""
+    """Best-effort landmark names from 'within … of', colon lists, or university names."""
     match = _OF_PATTERN.search(message)
-    if match is None:
-        return ()
-    chunk = match.group(1).strip().rstrip(".")
-    # Drop trailing instruction clauses accidentally captured.
-    chunk = re.split(
-        r"\.\s+|,\s*(?:choose|compare|return|generate)\b",
-        chunk,
-        maxsplit=1,
-        flags=re.IGNORECASE,
-    )[0]
-    pieces = re.split(r",\s*and\s+|\s+and\s+|,\s+", chunk)
-    cleaned: list[str] = []
-    drop = {"tehran", "iran", "the"}
-    for part in pieces:
-        part = re.sub(r"^(the|a|an)\s+", "", part, flags=re.IGNORECASE).strip(" .,")
-        if len(part) < 2 or part.lower() in drop:
-            continue
-        cleaned.append(part)
-    return tuple(cleaned) if len(cleaned) >= 2 else ()
+    if match is not None:
+        chunk = match.group(1).strip().rstrip(".")
+        chunk = re.split(
+            r"\.\s+|,\s*(?:choose|compare|return|generate)\b",
+            chunk,
+            maxsplit=1,
+            flags=re.IGNORECASE,
+        )[0]
+        parsed = _split_landmark_chunk(chunk)
+        if len(parsed) >= 2:
+            return parsed
+    universities = _university_labels(message)
+    if len(universities) >= 1:
+        return universities
+    if ":" in message:
+        tail = message.split(":", 1)[1]
+        parsed = _split_landmark_chunk(tail)
+        if parsed:
+            return parsed
+    return ()
 
 
 def canonicalize_place_query(
@@ -190,6 +221,13 @@ def canonicalize_place_query(
             query = f"{query}, Iran"
         else:
             query = f"{query}, Tehran, Iran"
+    elif _ISTANBUL_HINT.search(user_message) and not re.search(
+        r",\s*(Istanbul|Turkey|Türkiye)\b", query, re.I
+    ):
+        if re.search(r"\bIstanbul\b", query, re.I):
+            query = f"{query}, Turkey"
+        else:
+            query = f"{query}, Istanbul, Turkey"
     return query[:200]
 
 
@@ -283,10 +321,10 @@ def tags_for_feature_concept(concept: str) -> list[str] | None:
 
 
 def seed_plan_from_user_message(message: str) -> MultiTargetComparisonPlan | None:
-    """Deterministic seed when landmarks and radius are explicit in the request."""
+    """Deterministic seed when landmarks are explicit in the request."""
     labels = extract_landmark_labels(message)
-    radius = extract_radius_m_from_user(message)
-    if len(labels) < 2 or radius is None:
+    radius = extract_radius_m_from_user(message) or DEFAULT_ANALYSIS_RADIUS_M
+    if len(labels) < 1:
         return None
     if _GREEN_SPACE_HINT.search(message):
         feature = "green spaces"
@@ -310,3 +348,28 @@ def seed_plan_from_user_message(message: str) -> MultiTargetComparisonPlan | Non
         radius_m=radius,
         comparison_goal=goal,
     )
+
+
+def _split_landmark_chunk(chunk: str) -> tuple[str, ...]:
+    pieces = re.split(r",\s*and\s+|\s+and\s+|\s+or\s+|,\s+", chunk)
+    cleaned: list[str] = []
+    drop = {"tehran", "iran", "istanbul", "turkey", "türkiye", "the"}
+    for part in pieces:
+        part = re.sub(r"^(the|a|an)\s+", "", part, flags=re.IGNORECASE).strip(" .,?")
+        if len(part) < 2 or part.lower() in drop:
+            continue
+        cleaned.append(part)
+    return tuple(cleaned)
+
+
+def _university_labels(message: str) -> tuple[str, ...]:
+    found: list[str] = []
+    seen: set[str] = set()
+    for match in _UNIVERSITY_NAME.finditer(message):
+        label = re.sub(r"\s+", " ", match.group(1)).strip(" .,")
+        key = label.lower()
+        if key in seen or len(label) < 5:
+            continue
+        seen.add(key)
+        found.append(label)
+    return tuple(found)

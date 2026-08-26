@@ -53,7 +53,7 @@ _PARK_DOC = DocumentationSourceSnapshot(
     score=0.95,
 )
 _CONV = "conversation-test-0001"
-_NOW = datetime(2026, 8, 21, 12, 0, tzinfo=timezone.utc)
+_NOW = datetime.now(tz=timezone.utc)
 _FC_A = {
     "type": "FeatureCollection",
     "features": [

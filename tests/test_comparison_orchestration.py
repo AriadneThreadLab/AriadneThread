@@ -318,16 +318,26 @@ class PassthroughEncoder:
     def encode(self, elements: Sequence[OverpassElement]) -> GeoJsonConversionResult:
         features: list[dict[str, Any]] = []
         for element in elements:
+            lon = float(element["lon"])
+            lat = float(element["lat"])
             features.append(
                 {
                     "type": "Feature",
                     "geometry": {
-                        "type": "Point",
-                        "coordinates": [float(element["lon"]), float(element["lat"])],
+                        "type": "Polygon",
+                        "coordinates": [
+                            [
+                                [lon, lat],
+                                [lon + 0.0003, lat],
+                                [lon + 0.0003, lat + 0.0003],
+                                [lon, lat + 0.0003],
+                                [lon, lat],
+                            ]
+                        ],
                     },
                     "properties": {
                         "osm_id": element["id"],
-                        "osm_type": element["type"],
+                        "osm_type": "way",
                         "tags": dict(element.get("tags") or {}),
                     },
                 }
@@ -460,17 +470,6 @@ async def test_backend_controls_dependency_order_offline():
             LLMResponse(
                 content=json.dumps(
                     {
-                        "primary_metric": "count",
-                        "inferred_goal": "abundance",
-                        "rationale": "availability",
-                        "supporting_metrics": [],
-                    }
-                ),
-                model="fake",
-            ),
-            LLMResponse(
-                content=json.dumps(
-                    {
                         "final_answer": (
                             "University of Tehran has 2 parks; Sharif has 1 (computed counts)."
                         )
@@ -490,12 +489,12 @@ async def test_backend_controls_dependency_order_offline():
     assert result.analysis is not None
     assert result.analysis.status == "completed"
     assert result.validated_tags == ["leisure=park"]
-    # Dependency order: knowledge -> resolve x2 -> query x2 -> analyze
     results_only = [e.tool_name for e in result.trace if e.kind == "tool_result"]
     assert results_only[0] == "search_osm_knowledge"
     assert results_only[1:3] == ["resolve_place", "resolve_place"]
     assert results_only[3:5] == ["query_osm", "query_osm"]
-    assert results_only[5] == "analyze_features"
+    assert "analyze_features" not in results_only
+    assert result.analysis.decision_trace.selected_indicator_id == "feature_count"
     assert llm.seen_tools[0] is None  # compact planner: no tools
     assert any(opt is not None and opt.json_mode for opt in llm.seen_options)
     assert "City Hall" not in result.answer
@@ -559,20 +558,9 @@ async def test_green_space_comparison_queries_union_tags_for_both_targets():
             LLMResponse(
                 content=json.dumps(
                     {
-                        "primary_metric": "count",
-                        "inferred_goal": "abundance",
-                        "rationale": "availability",
-                        "supporting_metrics": [],
-                    }
-                ),
-                model="fake",
-            ),
-            LLMResponse(
-                content=json.dumps(
-                    {
                         "final_answer": (
-                            "University of Tehran has more mapped green-space features "
-                            "than Sharif (computed counts)."
+                            "University of Tehran has a higher mapped green-space ratio "
+                            "than Sharif (computed coverage)."
                         )
                     }
                 ),
@@ -588,7 +576,9 @@ async def test_green_space_comparison_queries_union_tags_for_both_targets():
 
     assert result.stop_reason == "final_answer"
     assert result.analysis is not None
-    assert result.validated_tags == list(GREEN_SPACE_TAGS)
+    catalog_green = ("leisure=park", "leisure=garden", "landuse=grass", "natural=wood")
+    assert result.validated_tags == list(catalog_green)
+    assert result.analysis.decision_trace.selected_indicator_id == "green_space_ratio"
     assert result.geojson is not None
     labels = {feature["properties"]["analysis_target"] for feature in result.geojson["features"]}
     assert labels == {"University of Tehran", "Sharif University of Technology"}
@@ -599,10 +589,10 @@ async def test_green_space_comparison_queries_union_tags_for_both_targets():
     assert len(overpass.queries) == 2
     for built in overpass.queries:
         assert "out geom" in built
-        for tag in GREEN_SPACE_TAGS:
+        for tag in catalog_green:
             key, value = tag.split("=", 1)
             assert f'["{key}"="{value}"]' in built
-        assert '["leisure"="park"]["landuse"="grass"]' not in built
+        assert '["leisure"="park"]["leisure"="garden"]' not in built
 
 
 @pytest.mark.asyncio

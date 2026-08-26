@@ -12,7 +12,7 @@ chain-of-thought.
 | `knowledge_sources` | OSM Wiki citations used for grounding (title, section, URL, score) |
 | `overpass_query` | The compiled Overpass QL for the live retrieval (read-only provenance) |
 | `analysis.plan` | The validated analytical plan the tools executed |
-| `analysis.decision_trace` | Catalog rules and feasibility outcomes that selected the metric |
+| `analysis.decision_trace` | Domain, candidate indicators, selected indicator, method, and rules |
 | `analysis.result` / `comparison` | Computed values and the comparison statement |
 | Attribution | OpenStreetMap ODbL credit on live results |
 
@@ -26,8 +26,10 @@ tool name, status, scope, tags, limits, and feature counts. A client-side
 “rendered GeoJSON on the map” event is marked as local and is not a model
 decision.
 
-OSM Documentation Sources lists the retrieved Wiki pages. The Comparison Report
-states the analysis goal, selected indicator, method, and data limitations.
+OSM Documentation Sources lists the retrieved Wiki pages. If a follow-up reuses
+previously validated grounding, those citations stay visible. The Comparison
+Report states the analysis goal, selected indicator, why it was selected,
+per-target values, ranking, units, and data limitations.
 
 ## Provenance on the map
 
@@ -38,8 +40,9 @@ returned.
 ## Analytical thread
 
 ```
-question → plan → grounded tags → place resolution → Overpass retrieval
-        → deterministic metrics → report + map + citations
+question → domain → catalog candidates → selected indicator
+        → OSM data plan → grounded tags → place resolution → Overpass retrieval
+        → deterministic indicator execution → comparison → report + map + citations
 ```
 
 If a step fails (invalid plan, empty Overpass result, place ambiguity), the

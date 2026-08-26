@@ -171,7 +171,8 @@ async def test_form_targets_canonical_api_contract(client: httpx.AsyncClient):
     assert 'method: "POST"' in api_js
     assert "conversationId" in api_js or "conversation_id" in api_js
     assert "ariadne-conversation-id" in main_js
-    assert "execution_memory" in main_js
+    assert "selected_indicator_id" in main_js
+    assert "osm_grounding" in main_js
 
 
 async def test_workflow_shows_execution_memory_decisions():
@@ -190,6 +191,7 @@ async def test_istanbul_examples_and_initial_map_viewport():
     map_js = _read("static", "js", "map.js")
     css = _CSS.read_text(encoding="utf-8")
     assert "Find public parks around Istanbul Technical University." in main_js
+    assert "larger proportion of green space" in main_js
     assert "Boğaziçi University" in main_js
     assert "Yıldız Technical University" in main_js  # noqa: RUF001
     assert "DEFAULT_CENTER = [28.9784, 41.0082]" in map_js

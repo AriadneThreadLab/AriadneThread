@@ -1,0 +1,48 @@
+indicator_id: service_accessibility
+domain: urban_services
+display_label: Service accessibility
+purpose: Geodesic distance from a reference location to the nearest mapped urban service.
+goals: [accessibility]
+method_id: nearest_distance
+formula: "min distance(reference_point, service POIs)"
+unit: m
+display_precision: 0
+direction: lower_is_better
+min_observations: 1
+status: experimental
+since_catalog_version: indicator-catalog-1
+requirements:
+  - requirement_id: service_pois
+    kind: osm_features
+    source: openstreetmap
+    feature_spec:
+      geometry: positioned
+      element_types: [node, way]
+      categories:
+        - id: education
+          label: Education
+          tags: ["amenity=school"]
+        - id: health
+          label: Health
+          tags: ["amenity=hospital", "amenity=clinic", "amenity=pharmacy"]
+          tag_match: any
+        - id: daily
+          label: Daily services
+          tags: ["amenity=bank", "shop=supermarket", "amenity=marketplace"]
+          tag_match: any
+        - id: food
+          label: Food
+          tags: ["amenity=restaurant"]
+      documentation:
+        - title: Map Features
+          url: "https://wiki.openstreetmap.org/wiki/Map_Features"
+  - requirement_id: reference_point
+    kind: reference_point
+    source: user_input
+limitations:
+  - osm_completeness
+  - euclidean_not_route
+  - single_reference_point
+  - count_is_not_capacity
+references:
+  - citation: "Ariadne Thread metric catalog, metric-catalog-1 (nearest_distance). Distances are geodesic, not routed."

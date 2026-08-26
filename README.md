@@ -116,8 +116,8 @@ Details: [docs/traceability.md](docs/traceability.md).
 - Buffer / radius queries around resolved places
 - GeoJSON visualization and download
 - Statistical comparison across analysis targets
-- Geographic indicators from a fixed metric catalog (abundance, concentration,
-  accessibility, area, coverage)
+- Geographic indicators from a fixed catalog (domain → candidates → one
+  selected method, then deterministic execution)
 
 Distances are geodesic nearest-feature metres, not routed travel time.
 

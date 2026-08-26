@@ -71,6 +71,37 @@ class DistanceObservations:
         return len(self.access_distances_m)
 
 
+@dataclass(frozen=True, slots=True)
+class LengthObservations:
+    """Geodesic polyline lengths extracted for length / length-density methods."""
+
+    lengths_m: tuple[float, ...]
+    candidate_count: int
+    missing_count: int
+    invalid_count: int
+    geometry_counts: dict[str, int]
+
+    @property
+    def observation_count(self) -> int:
+        return len(self.lengths_m)
+
+
+@dataclass(frozen=True, slots=True)
+class CategoryObservations:
+    """Per-category feature counts for Shannon entropy."""
+
+    category_counts: tuple[int, ...]
+    candidate_count: int
+    missing_count: int
+    unknown_count: int
+    multi_match_count: int
+    geometry_counts: dict[str, int]
+
+    @property
+    def observation_count(self) -> int:
+        return int(sum(self.category_counts))
+
+
 @dataclass(slots=True)
 class _GeometryTally:
     counts: dict[str, int] = field(default_factory=dict)

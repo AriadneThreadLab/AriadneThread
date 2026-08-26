@@ -1,0 +1,45 @@
+indicator_id: intersection_density
+domain: mobility
+display_label: Intersection density
+purpose: Mapped network connectivity measured as intersections per square kilometre.
+goals: [concentration]
+method_id: intersection_density
+formula: "n(intersections) / area(analysis_area)"
+unit: intersections_per_km2
+display_precision: 1
+direction: higher_is_better
+min_observations: 1
+status: experimental
+since_catalog_version: indicator-catalog-1
+requirements:
+  - requirement_id: highway_features
+    kind: osm_features
+    source: openstreetmap
+    feature_spec:
+      geometry: line
+      element_types: [way]
+      categories:
+        - id: carriageway
+          label: Carriageway
+          tags:
+            - "highway=motorway"
+            - "highway=trunk"
+            - "highway=primary"
+            - "highway=secondary"
+            - "highway=tertiary"
+            - "highway=unclassified"
+            - "highway=residential"
+            - "highway=living_street"
+          tag_match: any
+      documentation:
+        - title: Map Features
+          url: "https://wiki.openstreetmap.org/wiki/Map_Features"
+  - requirement_id: analysis_area
+    kind: analysis_area
+    source: derived
+limitations:
+  - osm_completeness
+  - scope_definition_affects_results
+  - polygon_geometry_partially_available
+references:
+  - citation: "Cervero, R., & Kockelman, K. (1997). Travel demand and the 3Ds: density, diversity, and design. Transportation Research Part D, 2(3), 199–219."

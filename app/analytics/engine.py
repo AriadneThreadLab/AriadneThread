@@ -28,14 +28,20 @@ from app.analytics.contracts import (
 from app.analytics.datasets import DatasetRecord, DatasetRegistry
 from app.analytics.geometry import (
     GEOMETRY_STRATEGY_CAP,
+    GEOMETRY_STRATEGY_GEODESIC_LENGTH,
     GEOMETRY_STRATEGY_HAVERSINE,
+    GEOMETRY_STRATEGY_NETWORK,
+    GEOMETRY_STRATEGY_SHANNON,
     GEOMETRY_STRATEGY_SPHERICAL_AREA,
 )
 from app.analytics.limitations import select_limitations
+from app.analytics.network import IntersectionCensus
 from app.analytics.observations import (
     AreaObservations,
+    CategoryObservations,
     CountObservations,
     DistanceObservations,
+    LengthObservations,
     NumericObservations,
     extract_areas,
     extract_count,
@@ -317,6 +323,151 @@ class SpatialAnalyticsEngine:
             invalid_count=obs.invalid_count,
             notes=tuple(notes),
             geometry_strategy=GEOMETRY_STRATEGY_SPHERICAL_AREA,
+        )
+
+    def line_length(self, obs: LengthObservations) -> MetricComputation:
+        if not obs.lengths_m and obs.candidate_count == 0:
+            return MetricComputation(
+                value=0.0,
+                status="computed",
+                observation_count=0,
+                candidate_count=0,
+                missing_count=0,
+                invalid_count=0,
+                geometry_strategy=GEOMETRY_STRATEGY_GEODESIC_LENGTH,
+            )
+        if not obs.lengths_m:
+            return self._insufficient_length(obs)
+        return MetricComputation(
+            value=math.fsum(obs.lengths_m),
+            status="computed",
+            observation_count=obs.observation_count,
+            candidate_count=obs.candidate_count,
+            missing_count=obs.missing_count,
+            invalid_count=obs.invalid_count,
+            geometry_strategy=GEOMETRY_STRATEGY_GEODESIC_LENGTH,
+        )
+
+    def length_density(
+        self,
+        obs: LengthObservations,
+        *,
+        area_km2: float,
+    ) -> MetricComputation:
+        if area_km2 <= 0:
+            return MetricComputation(
+                value=None,
+                status="insufficient_data",
+                observation_count=obs.observation_count,
+                candidate_count=obs.candidate_count,
+                missing_count=obs.missing_count,
+                invalid_count=obs.invalid_count,
+                notes=("analysis area is zero or unavailable",),
+                geometry_strategy=GEOMETRY_STRATEGY_GEODESIC_LENGTH,
+            )
+        if not obs.lengths_m and obs.candidate_count == 0:
+            return MetricComputation(
+                value=0.0,
+                status="computed",
+                observation_count=0,
+                candidate_count=0,
+                missing_count=0,
+                invalid_count=0,
+                geometry_strategy=GEOMETRY_STRATEGY_GEODESIC_LENGTH,
+            )
+        if not obs.lengths_m:
+            return self._insufficient_length(obs)
+        length_km = math.fsum(obs.lengths_m) / 1000.0
+        return MetricComputation(
+            value=length_km / area_km2,
+            status="computed",
+            observation_count=obs.observation_count,
+            candidate_count=obs.candidate_count,
+            missing_count=obs.missing_count,
+            invalid_count=obs.invalid_count,
+            geometry_strategy=GEOMETRY_STRATEGY_GEODESIC_LENGTH,
+        )
+
+    def shannon_entropy(
+        self,
+        obs: CategoryObservations,
+        *,
+        log_base: float,
+    ) -> MetricComputation:
+        """Shannon entropy of category count shares.
+
+        ``p_i = n_i / N`` where ``N`` is the count of features that matched a
+        catalog category. Missing tags and unknown categories are excluded from
+        ``N`` and never treated as a zero-share category. The value is not
+        Pielou-normalised.
+        """
+        notes = ("Shannon entropy over category count shares; not normalised by ln(k)",)
+        if log_base <= 1.0:
+            return MetricComputation(
+                value=None,
+                status="insufficient_data",
+                observation_count=obs.observation_count,
+                candidate_count=obs.candidate_count,
+                missing_count=obs.missing_count,
+                invalid_count=obs.unknown_count,
+                notes=("log_base must be greater than 1",),
+                geometry_strategy=GEOMETRY_STRATEGY_SHANNON,
+            )
+        positive = [count for count in obs.category_counts if count > 0]
+        total = int(sum(positive))
+        if total == 0:
+            return MetricComputation(
+                value=None,
+                status="insufficient_data",
+                observation_count=0,
+                candidate_count=obs.candidate_count,
+                missing_count=obs.missing_count,
+                invalid_count=obs.unknown_count,
+                notes=notes,
+                geometry_strategy=GEOMETRY_STRATEGY_SHANNON,
+            )
+        log_of_base = math.log(log_base)
+        entropy = 0.0
+        for count in positive:
+            share = count / total
+            entropy -= share * (math.log(share) / log_of_base)
+        return MetricComputation(
+            value=entropy,
+            status="computed",
+            observation_count=total,
+            candidate_count=obs.candidate_count,
+            missing_count=obs.missing_count,
+            invalid_count=obs.unknown_count,
+            notes=notes,
+            geometry_strategy=GEOMETRY_STRATEGY_SHANNON,
+        )
+
+    def intersection_density(
+        self,
+        census: IntersectionCensus,
+        *,
+        area_km2: float,
+    ) -> MetricComputation:
+        if area_km2 <= 0:
+            return MetricComputation(
+                value=None,
+                status="insufficient_data",
+                observation_count=census.intersection_count,
+                candidate_count=census.way_count,
+                missing_count=0,
+                invalid_count=0,
+                notes=("analysis area is zero or unavailable", *census.notes),
+                geometry_strategy=GEOMETRY_STRATEGY_NETWORK,
+            )
+        return MetricComputation(
+            value=census.intersection_count / area_km2,
+            status="computed",
+            observation_count=census.intersection_count,
+            candidate_count=census.way_count,
+            missing_count=0,
+            invalid_count=0,
+            notes=census.notes,
+            geometry_strategy=GEOMETRY_STRATEGY_NETWORK,
         )
 
     def ratio(
@@ -616,4 +767,16 @@ class SpatialAnalyticsEngine:
             missing_count=obs.missing_count,
             invalid_count=obs.invalid_count,
             geometry_strategy=GEOMETRY_STRATEGY_HAVERSINE,
+        )
+
+    @staticmethod
+    def _insufficient_length(obs: LengthObservations) -> MetricComputation:
+        return MetricComputation(
+            value=None,
+            status="insufficient_data",
+            observation_count=obs.observation_count,
+            candidate_count=obs.candidate_count,
+            missing_count=obs.missing_count,
+            invalid_count=obs.invalid_count,
+            geometry_strategy=GEOMETRY_STRATEGY_GEODESIC_LENGTH,
         )

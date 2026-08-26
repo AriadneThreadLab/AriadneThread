@@ -23,6 +23,7 @@ dependencies = [
     "geoalchemy2>=0.15,<0.18",
     "httpx>=0.27,<0.29",
     "openai>=1.40,<2",
+    "pyyaml>=6,<7",
 ]
 
 [project.optional-dependencies]
@@ -47,6 +48,7 @@ include = ["app*"]
 
 [tool.setuptools.package-data]
 "app.web" = ["templates/*.html", "static/css/*", "static/js/*", "static/img/*"]
+"app.indicators" = ["definitions/*/*.yaml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -80,7 +82,7 @@ plugins = ["pydantic.mypy"]
 exclude = ["^alembic/"]
 
 [[tool.mypy.overrides]]
-module = ["sentence_transformers.*", "pgvector.*"]
+module = ["sentence_transformers.*", "pgvector.*", "yaml"]
 ignore_missing_imports = true
 
 # Application code is strictly typed; test doubles may stay untyped.
