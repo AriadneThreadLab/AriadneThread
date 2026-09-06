@@ -27,6 +27,7 @@ from app.agent.contracts import (
     describe_payload,
     summarise_arguments,
 )
+from app.agent.energy_intent import is_energy_grid_request
 from app.agent.loop import LoopBudget, LoopLimits
 from app.agent.planning_diagnostics import diagnostics_log_fields, measure_planning_messages
 from app.agent.prompts import SYSTEM_PROMPT
@@ -46,13 +47,24 @@ from app.llm.tool_protocol import FINAL_ANSWER_KEY, TOOL_CALL_KEY
 from app.places.contracts import PlaceRegistry
 from app.tools.analyze_features import TOOL_NAME as ANALYZE_FEATURES
 from app.tools.context import AnalysisRunState, GroundingState, ToolContext
+from app.tools.energy_capabilities import safe_logged_energy_ids
+from app.tools.energy_tools import TOOL_NAME as ANALYZE_ENERGY_GRID
 from app.tools.query_osm import TOOL_NAME as QUERY_OSM
 from app.tools.registry import ToolRegistry
 from app.tools.resolve_place import TOOL_NAME as RESOLVE_PLACE
 from app.tools.search_osm_knowledge import TOOL_NAME as SEARCH_OSM_KNOWLEDGE
+from app.tools.simbench_tools import TOOL_NAME as SIMBENCH_QUERY
 
 _MAX_PROTOCOL_REPAIRS = 2
 _MAX_IDENTICAL_ARGUMENT_FAILURES = 2
+_ENERGY_TERMINAL_ERROR_CODES = frozenset(
+    {
+        "energy_plugin_internal_error",
+        "energy_plugin_unavailable",
+        "chart_normalization_error",
+        "energy_analysis_failed",
+    }
+)
 _PROTOCOL_LEAK_HINT = re.compile(
     rf"({TOOL_CALL_KEY}|{FINAL_ANSWER_KEY}|```)",
     re.IGNORECASE,
@@ -61,7 +73,7 @@ _ANALYTICAL_INTENT = re.compile(
     r"\b("
     r"compare|comparison|more parks|denser|density|average|median|"
     r"accessib|typical size|variability|standard deviation|coverage|"
-    r"how many|which area|better access"
+    r"how many|which area|better access|analyze|analysis|load patterns?"
     r")\b",
     re.IGNORECASE,
 )
@@ -99,7 +111,9 @@ _TOOL_BATCH_ORDER = {
     SEARCH_OSM_KNOWLEDGE: 0,
     RESOLVE_PLACE: 1,
     QUERY_OSM: 2,
+    SIMBENCH_QUERY: 2,
     ANALYZE_FEATURES: 3,
+    ANALYZE_ENERGY_GRID: 3,
 }
 
 logger = logging.getLogger(__name__)
@@ -148,7 +162,8 @@ class PlannerExecutorAgent:
                 incremental = None
 
         use_incremental = incremental is not None
-        use_fresh_comparison = should_use_multi_target_runner(request.message)
+        energy_intent = is_energy_grid_request(request.message)
+        use_fresh_comparison = should_use_multi_target_runner(request.message) and not energy_intent
         if use_incremental or use_fresh_comparison:
             runner = MultiTargetComparisonRunner(self._llm, self._registry)
             try:
@@ -239,6 +254,13 @@ class PlannerExecutorAgent:
                 state=state,
                 user_message=request.message,
                 places=tool_context.places,
+            )
+            logger.info(
+                "available_tools round=%s tool_count=%s tool_names=%s energy_intent=%s",
+                llm_round,
+                len(facing),
+                [getattr(item, "name", None) for item in facing],
+                is_energy_grid_request(request.message),
             )
             planning_diag = None
             if llm_round == 1:
@@ -482,6 +504,8 @@ class PlannerExecutorAgent:
             live_query_failed=state.live_query_failed,
             live_error_code=state.live_error_code,
             analysis=state.analysis,
+            energy_analysis=state.energy_analysis,
+            charts=list(state.charts),
             conversation_id=conversation_id,
         )
         return await self._finish_with_memory(request, result, tool_context, conversation_id)
@@ -564,11 +588,14 @@ class PlannerExecutorAgent:
                 tool_context=tool_context,
             )
             if gate_error is not None:
+                logged_ids = safe_logged_energy_ids(call.arguments)
                 logger.info(
-                    "tool_validation tool=%s argument_keys=%s validation_status=failed "
-                    "error_code=%s",
+                    "tool_validation tool=%s argument_keys=%s network_id=%s "
+                    "capability_id=%s validation_status=failed error_code=%s",
                     call.name,
                     arg_keys,
+                    logged_ids.get("network_id", "-"),
+                    logged_ids.get("capability_id", "-"),
                     gate_error.code,
                 )
                 recorder.record(
@@ -624,11 +651,16 @@ class PlannerExecutorAgent:
             started = time.perf_counter()
             invocation = await self._registry.invoke(call, tool_context)
             duration_ms = int((time.perf_counter() - started) * 1000)
+            energy_stop: str | None = None
             if invocation.ok:
+                logged_ids = safe_logged_energy_ids(call.arguments)
                 logger.info(
-                    "tool_validation tool=%s argument_keys=%s validation_status=passed",
+                    "tool_validation tool=%s argument_keys=%s network_id=%s "
+                    "capability_id=%s validation_status=passed",
                     call.name,
                     arg_keys,
+                    logged_ids.get("network_id", "-"),
+                    logged_ids.get("capability_id", "-"),
                 )
                 result_details = {
                     "status": "completed",
@@ -653,11 +685,15 @@ class PlannerExecutorAgent:
                     _apply_documentation_grounding(state, tool_context)
             else:
                 code = invocation.error_code or "tool_execution_error"
+                logged_ids = safe_logged_energy_ids(call.arguments)
                 logger.info(
-                    "tool_validation tool=%s argument_keys=%s validation_status=failed "
-                    "error_code=%s",
+                    "tool_execution tool=%s argument_keys=%s network_id=%s "
+                    "capability_id=%s validation_status=passed "
+                    "execution_status=failed error_code=%s",
                     call.name,
                     arg_keys,
+                    logged_ids.get("network_id", "-"),
+                    logged_ids.get("capability_id", "-"),
                     code,
                 )
                 error_details: dict[str, Any] = {
@@ -666,6 +702,7 @@ class PlannerExecutorAgent:
                     "error_code": code,
                     "duration_ms": duration_ms,
                     "argument_keys": arg_keys,
+                    **safe_logged_energy_ids(call.arguments),
                 }
                 if invocation.failure_meta:
                     for key in (
@@ -717,6 +754,12 @@ class PlannerExecutorAgent:
                             "The model repeated the same invalid tool arguments. "
                             "No geographic query was completed."
                         )
+                elif call.name == ANALYZE_ENERGY_GRID and _is_terminal_energy_error(code):
+                    public = invocation.public_error or invocation.observation
+                    state.note_error(code, public)
+                    state.energy_workflow_stopped = True
+                    state.energy_terminal_error_code = code
+                    energy_stop = _energy_internal_stop_answer(code)
                 else:
                     public = invocation.public_error or invocation.observation
                     state.note_error(code, public)
@@ -731,11 +774,37 @@ class PlannerExecutorAgent:
                     tool_call_id=call.id,
                 )
             )
+            if energy_stop is not None:
+                recorder.record(
+                    "stopped",
+                    f"energy workflow stopped ({state.energy_terminal_error_code})",
+                    round_index=round_index,
+                    tool_name=call.name,
+                    error_code=state.energy_terminal_error_code,
+                    details={
+                        "status": "failed",
+                        "error_code": state.energy_terminal_error_code,
+                        "do_not_replan": True,
+                    },
+                )
+                return energy_stop
         return None
 
 
 def _invalid_call_signature(tool_name: str, argument_keys: list[str], error_code: str) -> str:
     return f"{tool_name}|{','.join(argument_keys)}|{error_code}"
+
+
+def _is_terminal_energy_error(code: str) -> bool:
+    return code in _ENERGY_TERMINAL_ERROR_CODES
+
+
+def _energy_internal_stop_answer(code: str) -> str:
+    return (
+        "The selected GeoLoadST analysis stopped because of an internal plugin or "
+        f"engine failure ({code}). Another scientific method was not run, because "
+        "it would not answer the same question. No charts or map overlay were invented."
+    )
 
 
 def _model_facing_tools(
@@ -751,10 +820,20 @@ def _model_facing_tools(
     """
     has_datasets = bool(state.datasets.refs())
     analytical = bool(_ANALYTICAL_INTENT.search(user_message))
+    energy = is_energy_grid_request(user_message)
     has_places = bool(places.refs()) if places is not None else False
     out: list[Any] = []
     for item in definitions:
         name = getattr(item, "name", None)
+        if energy and name in {
+            SEARCH_OSM_KNOWLEDGE,
+            RESOLVE_PLACE,
+            QUERY_OSM,
+            ANALYZE_FEATURES,
+        }:
+            continue
+        if name == ANALYZE_ENERGY_GRID and (not energy or state.energy_workflow_stopped):
+            continue
         if name == ANALYZE_FEATURES and not (has_datasets and analytical):
             continue
         if (
@@ -821,6 +900,21 @@ def _pre_invoke_gate(
                         "Use only dataset_ref values returned by query_osm observations; "
                         "do not invent future references."
                     )
+        return None
+
+    if call.name == ANALYZE_ENERGY_GRID:
+        if state.energy_workflow_stopped:
+            code = state.energy_terminal_error_code or "energy_plugin_internal_error"
+            return ToolNotEligibleError(
+                "analyze_energy_grid is not eligible after an internal GeoLoadST "
+                f"failure ({code}). Do not select a different capability_id."
+            )
+        network_id = call.arguments.get("network_id")
+        has_loaded = bool(tool_context.analysis.energy_network_id or state.last_simbench_network_id)
+        if not (isinstance(network_id, str) and network_id.strip()) and not has_loaded:
+            return ToolNotEligibleError(
+                "analyze_energy_grid is not eligible until simbench_query has loaded a network"
+            )
         return None
 
     if call.name == QUERY_OSM:
@@ -976,6 +1070,9 @@ def _tool_call_details(call: ToolCall) -> dict[str, Any]:
         if isinstance(query, str):
             details["place_query"] = query
         return details
+    if call.name == ANALYZE_ENERGY_GRID:
+        details.update(safe_logged_energy_ids(args))
+        return details
     if call.name == ANALYZE_FEATURES:
         details["analysis_type"] = args.get("analysis_type")
         targets = args.get("targets")
@@ -1066,6 +1163,12 @@ def _payload_details(payload: Any) -> dict[str, Any]:
     analysis_status = getattr(payload, "analysis_status", None)
     if isinstance(analysis_status, str):
         details["analysis_status"] = analysis_status
+    capability = getattr(payload, "capability", None)
+    if isinstance(capability, str) and capability:
+        details["capability_id"] = capability
+    requested_capability = getattr(payload, "requested_capability", None)
+    if isinstance(requested_capability, str) and requested_capability:
+        details["requested_capability"] = requested_capability
     metrics_computed = getattr(payload, "metrics_computed", None)
     if isinstance(metrics_computed, int):
         details["metrics_computed"] = metrics_computed

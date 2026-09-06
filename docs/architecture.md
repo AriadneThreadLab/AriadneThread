@@ -57,6 +57,8 @@ Tool Registry validates name + Pydantic args
  ↓
 search_osm_knowledge and/or resolve_place and/or query_osm
 and/or analyze_features (state-aware model-facing eligibility)
+and/or simbench_query (SimBench datasets only)
+and/or analyze_energy_grid (GeoLoadST analysis; no science in Ariadne)
  ↓
 deterministic indicator execution (catalog method, never model arithmetic)
  ↓
@@ -76,8 +78,8 @@ Opening `GET /` does **not** touch PostgreSQL, Ollama, Overpass, or BGE-M3.
 `app/bootstrap.py` builds:
 
 settings → Database → embedding provider → retriever → Overpass tool →
-resolve_place tool → analyze_features tool → LLM provider (Ollama or AvalAI) →
-Tool Registry → PlannerExecutorAgent
+resolve_place tool → analyze_features tool → simbench_query tool →
+LLM provider (Ollama or AvalAI) → Tool Registry → PlannerExecutorAgent
 
 `app/main.py` lifespan attaches these to `app.state` and closes them on shutdown.
 Nothing at import time opens pools, loads models, or dials the network.
@@ -91,7 +93,7 @@ Nothing at import time opens pools, loads models, or dials the network.
 | Retrieval | `KnowledgeRetriever` | session-bound pgvector retriever |
 | Overpass | `OverpassClient` | `HttpOverpassClient` |
 | Places | `PlaceResolver` | `NominatimPlaceResolver` |
-| Tools | `Tool` + registry | `search_osm_knowledge`, `resolve_place`, `query_osm`, `analyze_features` |
+| Tools | `Tool` + registry | `search_osm_knowledge`, `resolve_place`, `query_osm`, `analyze_features`, `simbench_query`, `analyze_energy_grid` |
 
 ### Prompted vs native tools
 
@@ -163,11 +165,11 @@ budget remains.
 
 ## Documentation vs live data
 
-| | `search_osm_knowledge` | `query_osm` |
-|---|---|---|
-| Source | Local OSM Wiki corpus | Overpass API |
-| Output | Passages + scores | Features + GeoJSON + generated QL |
-| May fill `geojson` | No | Yes |
+| | `search_osm_knowledge` | `query_osm` | `simbench_query` |
+|---|---|---|---|
+| Source | Local OSM Wiki corpus | Overpass API | SimBench dataset |
+| Output | Passages + scores | Features + GeoJSON + generated QL | Network metadata + GeoJSON |
+| May fill `geojson` | No | Yes | Yes (WGS84 buses/lines only) |
 
 ## Safe Overpass path
 

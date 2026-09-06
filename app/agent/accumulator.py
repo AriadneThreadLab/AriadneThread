@@ -11,12 +11,16 @@ from typing import Any
 
 from app.agent.contracts import SourceReference
 from app.agent.geojson_combine import combine_target_feature_collections
+from app.analytics.charts import AnalysisChart
 from app.analytics.contracts import AnalysisBlock, KnowledgeSourceRef
 from app.analytics.datasets import DatasetRegistry
 from app.osm.contracts import GeoJsonFeatureCollection
 from app.rag.contracts import RetrievedPassage
 from app.tools.analyze_features import TOOL_NAME as ANALYZE_FEATURES
 from app.tools.analyze_features import AnalyzeFeaturesResult
+from app.tools.energy_report import LAYER_SIMBENCH, EnergyAnalysisReport, layer_name_for
+from app.tools.energy_tools import TOOL_NAME as ANALYZE_ENERGY_GRID
+from app.tools.energy_tools import AnalyzeEnergyGridResult
 from app.tools.query_osm import TOOL_NAME as QUERY_OSM
 from app.tools.query_osm import QueryOsmResult
 from app.tools.resolve_place import TOOL_NAME as RESOLVE_PLACE
@@ -27,6 +31,8 @@ from app.tools.search_osm_knowledge import (
 from app.tools.search_osm_knowledge import (
     SearchOsmKnowledgeResult,
 )
+from app.tools.simbench_tools import TOOL_NAME as SIMBENCH_QUERY
+from app.tools.simbench_tools import SimBenchQueryResult
 
 _TAG_TITLE_RE = re.compile(
     r"^Tag:\s*([A-Za-z0-9_:-]+)=([A-Za-z0-9_:-]+)$",
@@ -56,6 +62,11 @@ class ResultAccumulator:
         self._target_collections: list[tuple[str, GeoJsonFeatureCollection]] = []
         self._source_keys: set[tuple[str, str, str | None]] = set()
         self._overpass_queries: list[str] = []
+        self.last_simbench_network_id: str | None = None
+        self.energy_analysis: EnergyAnalysisReport | None = None
+        self.charts: list[AnalysisChart] = []
+        self.energy_workflow_stopped: bool = False
+        self.energy_terminal_error_code: str | None = None
 
     def absorb(self, tool_name: str, payload: Any) -> None:
         if tool_name == QUERY_OSM and isinstance(payload, QueryOsmResult):
@@ -69,6 +80,12 @@ class ResultAccumulator:
             return
         if tool_name == ANALYZE_FEATURES and isinstance(payload, AnalyzeFeaturesResult):
             self._absorb_analysis(payload)
+            return
+        if tool_name == SIMBENCH_QUERY and isinstance(payload, SimBenchQueryResult):
+            self._absorb_simbench(payload)
+            return
+        if tool_name == ANALYZE_ENERGY_GRID and isinstance(payload, AnalyzeEnergyGridResult):
+            self._absorb_energy_analysis(payload)
 
     def _absorb_query_osm(self, result: QueryOsmResult) -> None:
         self.absorb_osm_target_collection(
@@ -125,6 +142,79 @@ class ResultAccumulator:
                 url=None,
             )
         )
+
+    def _absorb_simbench(self, result: SimBenchQueryResult) -> None:
+        """Attach SimBench metadata and geometries. Never labeled as OSM."""
+        if result.warnings:
+            self.warnings.extend(result.warnings)
+        self._add_source(
+            SourceReference(
+                kind="simbench_network",
+                title=result.source_title,
+                url=None,
+            )
+        )
+        if result.metadata is not None:
+            self.last_simbench_network_id = result.metadata.network_id
+        if result.action != "load" or result.geojson is None:
+            if result.scope_summary and not self.scope_summary:
+                self.scope_summary = result.scope_summary
+            return
+        target = LAYER_SIMBENCH
+        self.target_feature_counts[target] = result.feature_count
+        self._target_collections.append((target, result.geojson))
+        if len(self._target_collections) == 1:
+            self.geojson = result.geojson
+            self.feature_count = result.feature_count
+            self.scope_summary = result.scope_summary
+        else:
+            combined = combine_target_feature_collections(self._target_collections)
+            self.geojson = combined
+            self.feature_count = len(combined.get("features", []))
+            summaries = [f"{label}: {count}" for label, count in self.target_feature_counts.items()]
+            self.scope_summary = "Comparison targets — " + "; ".join(summaries)
+        self.live_query_failed = False
+        self.live_error_code = None
+
+    def _absorb_energy_analysis(self, result: AnalyzeEnergyGridResult) -> None:
+        """Attach GeoLoadST map output. Never labeled as OSM."""
+        if result.warnings:
+            self.warnings.extend(result.warnings)
+        self._add_source(
+            SourceReference(
+                kind="energy_analysis",
+                title=result.source_title,
+                url=None,
+            )
+        )
+        self.last_simbench_network_id = result.network_id
+        if result.analysis is not None:
+            self.energy_analysis = result.analysis
+        if result.charts:
+            self.charts.extend(result.charts)
+        layer = result.geojson if result.geojson is not None else result.spatial_layer
+        features = layer.get("features") if isinstance(layer, dict) else None
+        if not isinstance(features, list) or not features:
+            if result.scope_summary and not self.scope_summary:
+                self.scope_summary = result.scope_summary
+            return
+        target = layer_name_for(result.capability, result.analysis)
+        collection = {"type": "FeatureCollection", "features": features}
+        count = result.feature_count or len(features)
+        self.target_feature_counts[target] = count
+        self._target_collections.append((target, collection))
+        if len(self._target_collections) == 1:
+            self.geojson = collection
+            self.feature_count = count
+            self.scope_summary = result.scope_summary
+        else:
+            combined = combine_target_feature_collections(self._target_collections)
+            self.geojson = combined
+            self.feature_count = len(combined.get("features", []))
+            summaries = [f"{label}: {count}" for label, count in self.target_feature_counts.items()]
+            self.scope_summary = "Comparison targets — " + "; ".join(summaries)
+        self.live_query_failed = False
+        self.live_error_code = None
 
     def note_live_query_failure(self, meta: dict[str, Any]) -> None:
         """Record validated query provenance after Overpass fails (no fake GeoJSON)."""

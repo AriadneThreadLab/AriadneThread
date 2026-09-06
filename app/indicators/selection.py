@@ -52,6 +52,16 @@ _URBAN_SERVICES = re.compile(
     r"hospitals?|schools?|pharmac(?:y|ies)|supermarkets?)\b",
     re.IGNORECASE,
 )
+_ENERGY_GRID = re.compile(
+    r"\b("
+    r"simbench|geoloadst|pandapower|"
+    r"energy[\s_-]?grid|energy[\s_-]?network|"
+    r"power[\s_-]?grid|power[\s_-]?network|"
+    r"spatial load|load patterns?|load profiles?|"
+    r"load instability|grid load"
+    r")\b",
+    re.IGNORECASE,
+)
 
 _DIVERSITY = re.compile(
     r"\b(diversity|diverse|variety|evenness|mix of types|shannon)\b",
@@ -86,6 +96,7 @@ _DOMAIN_PATTERNS: tuple[tuple[DomainId, re.Pattern[str], str], ...] = (
     ("green_space", _GREEN_SPACE, "User asked about green space."),
     ("mobility", _MOBILITY, "User asked about roads, highways, or intersections."),
     ("urban_services", _URBAN_SERVICES, "User asked about urban services or POIs."),
+    ("energy_grid", _ENERGY_GRID, "User asked about SimBench or energy-grid analysis."),
 )
 
 _DEFAULT_GOAL: dict[DomainId, AnalysisGoal] = {
@@ -93,6 +104,7 @@ _DEFAULT_GOAL: dict[DomainId, AnalysisGoal] = {
     "green_space": "coverage",
     "mobility": "concentration",
     "urban_services": "concentration",
+    "energy_grid": "variability",
 }
 
 _GOAL_RULE: dict[AnalysisGoal, RuleId] = {

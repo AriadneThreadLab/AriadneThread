@@ -57,7 +57,8 @@ RUN_INTEGRATION=1 ./.venv/bin/pytest -m integration
 
 ## Safety boundaries
 
-- Documentation is not map data. Only `query_osm` may populate GeoJSON.
+- Documentation is not map data. Only `query_osm` (OSM) or `simbench_query`
+  (SimBench) may populate GeoJSON.
 - Empty Overpass results stay empty.
 - The model does not author Overpass QL; `OsmFeatureQuery` is compiled by
   `build_overpass_query`.

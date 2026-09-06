@@ -7,10 +7,12 @@ only shapes what the local LLM sees in the system prompt.
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from typing import Any
 
 from app.llm.contracts import ToolDefinition
 from app.llm.tool_schema import normalize_tool_parameters_schema
+from app.tools.energy_capabilities import capability_json_schema
 
 # Hand-authored compact shapes for registered tools. Keys must match
 # the authoritative models; examples are illustrative only.
@@ -61,7 +63,7 @@ _COMPACT_SPECS: dict[str, dict[str, Any]] = {
     "query_osm": {
         "purpose": (
             "Retrieve live OpenStreetMap features for ONE spatial target. "
-            "Only source of live map data. Never invent coordinates or Overpass QL."
+            "OSM only — not SimBench. Never invent coordinates or Overpass QL."
         ),
         "when_to_use": (
             "List/find/retrieve live features. Named place for cities; "
@@ -222,7 +224,73 @@ _COMPACT_SPECS: dict[str, dict[str, Any]] = {
             ],
         },
     },
+    "simbench_query": {
+        "purpose": (
+            "Load a SimBench power-network dataset or list available network codes. "
+            "Returns metadata and map geometries. Not OSM and not GeoLoadST analysis."
+        ),
+        "when_to_use": (
+            "Power-network / SimBench questions. Omit network_id to list codes. "
+            "Pass network_id to load one dataset."
+        ),
+        "arguments": {
+            "type": "object",
+            "properties": {
+                "network_id": {
+                    "type": "string",
+                    "description": "SimBench network code. Omit to list available codes.",
+                }
+            },
+        },
+        "example": {"network_id": "1-complete_data-mixed-all-1-sw"},
+    },
+    "analyze_energy_grid": {
+        "purpose": (
+            "Run GeoLoadST analysis on a SimBench network. Not OSM and not a data loader. "
+            "Does not invent scientific numbers. Arguments are strings only."
+        ),
+        "when_to_use": (
+            "After simbench_query, or with an explicit network_id, for GeoLoadST "
+            "analysis: Moran LISA, spatial clusters of unstable loads, or network "
+            "topology centrality (degree / betweenness / closeness, important buses). "
+            "For those topology questions use topology_centrality — never invent "
+            "topology_analysis or network_centrality."
+        ),
+        "arguments": {
+            "type": "object",
+            "required": ["network_id", "capability_id"],
+            "properties": {
+                "network_id": {
+                    "type": "string",
+                    "description": "SimBench network code.",
+                },
+                "capability_id": {
+                    "type": "string",
+                    "description": "Registered GeoLoadST capability_id.",
+                },
+            },
+        },
+        "example": {
+            "network_id": "1-MV-urban--0-sw",
+            "capability_id": "topology_centrality",
+        },
+    },
 }
+
+
+def _energy_arguments_from_registry(base: dict[str, Any]) -> dict[str, Any]:
+    """Attach the live GeoLoadST capability enum. Does not invent ids."""
+    arguments = deepcopy(base)
+    properties = arguments.get("properties")
+    if isinstance(properties, dict):
+        schema = capability_json_schema()
+        schema["description"] = (
+            "Registered GeoLoadST capability_id. "
+            "Use topology_centrality for network topology, important buses, "
+            "or degree / betweenness / closeness. Do not invent topology_analysis."
+        )
+        properties["capability_id"] = schema
+    return arguments
 
 
 def render_compact_tool_catalogue(tools: list[ToolDefinition]) -> list[dict[str, Any]]:
@@ -231,12 +299,15 @@ def render_compact_tool_catalogue(tools: list[ToolDefinition]) -> list[dict[str,
     for tool in tools:
         compact = _COMPACT_SPECS.get(tool.name)
         if compact is not None:
+            arguments = compact["arguments"]
+            if tool.name == "analyze_energy_grid":
+                arguments = _energy_arguments_from_registry(compact["arguments"])
             entries.append(
                 {
                     "name": tool.name,
                     "purpose": compact["purpose"],
                     "when_to_use": compact["when_to_use"],
-                    "arguments": compact["arguments"],
+                    "arguments": arguments,
                     "example": compact["example"],
                 }
             )

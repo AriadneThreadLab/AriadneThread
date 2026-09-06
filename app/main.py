@@ -19,6 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from app import __version__
 from app.api.agent import router as agent_router
 from app.api.errors import register_exception_handlers
+from app.api.health import geoloadst_health
 from app.api.health import router as health_router
 from app.api.middleware import request_context_middleware
 from app.bootstrap import ApplicationServices, build_application_services
@@ -57,6 +58,7 @@ def create_app(
         app.state.geo_agent = owned.geo_agent
         # Selection only. No training pipeline is imported or started here.
         app.state.active_learning = owned.active_learning
+        energy = geoloadst_health()
         logger.info(
             "OSM GeoAgent starting (env=%s, provider=%s, model=%s, llm_host=%s, tools=%s)",
             owned.settings.app_env,
@@ -64,6 +66,12 @@ def create_app(
             owned.settings.llm_model,
             owned.settings.llm_endpoint_host,
             ",".join(owned.tool_registry.names) or "none",
+        )
+        logger.info(
+            "geoloadst_health available=%s version=%s capabilities=%s",
+            energy.geoloadst_available,
+            energy.version or "none",
+            ",".join(energy.capabilities) or "none",
         )
         try:
             yield

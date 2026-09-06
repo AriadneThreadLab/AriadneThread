@@ -21,6 +21,8 @@ The application does not download Ollama or Hugging Face models automatically.
 python3 -m venv .venv
 ./.venv/bin/pip install -e ".[dev]"
 ./.venv/bin/pip install -e ".[embeddings]"   # if you will index or search the corpus
+./.venv/bin/pip install -e ".[energy]"       # SimBench data tool
+./.venv/bin/pip install -e ../AriadneThread-GeoLoadST  # analyze_energy_grid plugin
 cp .env.example .env
 ```
 

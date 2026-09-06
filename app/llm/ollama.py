@@ -38,7 +38,12 @@ from app.llm.contracts import (
     ToolCall,
     ToolDefinition,
 )
-from app.llm.tool_protocol import parse_reply, render_tool_instructions, strip_reasoning
+from app.llm.tool_protocol import (
+    parse_reply,
+    recover_prompted_envelope,
+    render_tool_instructions,
+    strip_reasoning,
+)
 from app.llm.tool_schema import normalize_tool_parameters_schema, schema_structure_summary
 
 ToolCallMode = Literal["native", "prompted"]
@@ -225,6 +230,14 @@ class OllamaProvider:
                 model=model,
                 finish_reason=str(finish_reason) if finish_reason else None,
                 protocol_error=parsed.protocol_error,
+            )
+        recovered = recover_prompted_envelope(raw_content)
+        if recovered is not None:
+            return LLMResponse(
+                content=recovered.content,
+                tool_calls=recovered.tool_calls,
+                model=model,
+                finish_reason=str(finish_reason) if finish_reason else None,
             )
         return LLMResponse(
             content=strip_reasoning(raw_content),

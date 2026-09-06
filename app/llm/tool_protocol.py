@@ -41,7 +41,9 @@ _ATTEMPTED_PROTOCOL = re.compile(
     r"\bsearch_osm_knowledge\b|"
     r"\bresolve_place\b|"
     r"\bquery_osm\b|"
-    r"\banalyze_features\b"
+    r"\banalyze_features\b|"
+    r"\bsimbench_query\b|"
+    r"\banalyze_energy_grid\b"
     r")",
     re.IGNORECASE,
 )
@@ -197,7 +199,13 @@ def _classify_invalid_shape(visible: str, normalised: str, payload: Any | None) 
     if not isinstance(payload, dict):
         return "non_object_json"
     keys = set(payload)
-    if keys & {"search_osm_knowledge", "query_osm", "analyze_features"}:
+    if keys & {
+        "search_osm_knowledge",
+        "query_osm",
+        "analyze_features",
+        "simbench_query",
+        "analyze_energy_grid",
+    }:
         return "tool_names_as_top_level_keys"
     if "tool_call" in keys and TOOL_CALL_KEY not in keys:
         return "singular_tool_call"
@@ -305,7 +313,13 @@ def parse_reply(raw_content: str, *, id_prefix: str = "call_") -> ParsedReply:
     unknown = keys - _ALLOWED_TOP_LEVEL
     if unknown:
         # Common DeepSeek mistake: {"query_osm": {...}} instead of tool_calls.
-        if unknown & {"search_osm_knowledge", "query_osm", "analyze_features"}:
+        if unknown & {
+            "search_osm_knowledge",
+            "query_osm",
+            "analyze_features",
+            "simbench_query",
+            "analyze_energy_grid",
+        }:
             parsed = ParsedReply(
                 content="",
                 tool_calls=(),
@@ -400,3 +414,17 @@ def parse_reply(raw_content: str, *, id_prefix: str = "call_") -> ParsedReply:
     parsed = ParsedReply(content=answer, tool_calls=(), response_kind="final_answer")
     _log_parse_result(parsed, visible=visible, normalised=normalised, payload=payload)
     return parsed
+
+
+def recover_prompted_envelope(raw_content: str) -> ParsedReply | None:
+    """Accept prompted JSON tool_calls/final_answer when native tool_calls are empty.
+
+    Native providers often follow the system prompt and write the JSON envelope
+    into ``content`` with ``finish_reason=stop`` instead of emitting API tool calls.
+    """
+    parsed = parse_reply(raw_content)
+    if parsed.is_protocol_error:
+        return None
+    if parsed.tool_calls or parsed.response_kind == "final_answer":
+        return parsed
+    return None

@@ -29,9 +29,10 @@ before making structural changes.
 ## Non-negotiable design rules
 
 1. **Documentation is not map data.** `search_osm_knowledge` returns OSM
-   documentation; `query_osm` returns live features. Never let an answer, an
-   observation or a response field blur the two. `geojson` is populated only by
-   `query_osm`.
+ documentation; `query_osm` returns live OSM features; `simbench_query` returns
+ SimBench network data. Never let an answer, an observation or a response field
+ blur these sources. `geojson` is populated only by `query_osm`,
+ `simbench_query`, or `analyze_energy_grid`.
 2. **Never invent OSM results.** Empty results are reported as empty.
 3. **No model-authored Overpass QL.** The model fills in `OsmFeatureQuery`;
    `build_overpass_query` renders it. If a new capability is needed, extend the

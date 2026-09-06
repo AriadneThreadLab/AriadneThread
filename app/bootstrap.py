@@ -26,10 +26,12 @@ from app.osm.factory import build_query_osm_tool
 from app.places.factory import build_resolve_place_tool
 from app.rag.retriever import SessionBoundKnowledgeRetriever
 from app.tools.analyze_features import AnalyzeFeaturesTool
+from app.tools.energy_tools import build_analyze_energy_grid_tool
 from app.tools.factory import build_tool_registry
 from app.tools.query_osm import QueryOsmTool
 from app.tools.registry import ToolRegistry
 from app.tools.resolve_place import ResolvePlaceTool
+from app.tools.simbench_tools import build_simbench_query_tool
 
 
 @dataclass(slots=True)
@@ -67,12 +69,16 @@ def build_application_services(settings: Settings) -> ApplicationServices:
     query_osm_tool = build_query_osm_tool(settings)
     resolve_place_tool = build_resolve_place_tool(settings)
     analyze_features_tool = build_analyze_features_tool()
+    simbench_query_tool = build_simbench_query_tool()
+    analyze_energy_grid_tool = build_analyze_energy_grid_tool()
     llm_provider = build_llm_provider(settings)
     tool_registry = build_tool_registry(
         knowledge_retriever=retriever,
         query_osm_tool=query_osm_tool,
         resolve_place_tool=resolve_place_tool,
         analyze_features_tool=analyze_features_tool,
+        simbench_query_tool=simbench_query_tool,
+        analyze_energy_grid_tool=analyze_energy_grid_tool,
         rag_top_k=settings.rag_top_k,
     )
     execution_memory = build_execution_memory_service(settings, database, llm_provider)

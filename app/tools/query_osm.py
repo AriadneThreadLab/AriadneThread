@@ -46,7 +46,7 @@ TOOL_DESCRIPTION = (
     "point (user-supplied coords), bbox (user-supplied bounds), or "
     "place_ref_scope (trusted resolve_place ref + user radius_m). Optional limit "
     "(integer, not max_items). Never invent coordinates or Overpass QL. "
-    "Only source of live map data. One spatial target per call."
+    "Live OSM features only (not SimBench). One spatial target per call."
 )
 
 #: Arguments are the validated query spec itself; no parallel schema exists.

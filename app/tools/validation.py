@@ -51,6 +51,7 @@ def format_tool_argument_observation(
     error: ValidationError,
     *,
     argument_keys: list[str] | None = None,
+    arguments: dict[str, Any] | None = None,
 ) -> str:
     """Compact JSON observation the model can use to repair arguments."""
     missing, invalid, extra = classify_validation_fields(error)
@@ -80,4 +81,31 @@ def format_tool_argument_observation(
             "Required: query (string). Optional: top_k. Example: "
             '{"query":"public park OSM tag","top_k":5}'
         )
+    elif tool_name == "analyze_energy_grid":
+        from app.tools.energy_capabilities import (
+            is_allowed_host_capability,
+            registered_capability_ids,
+            unknown_capability_payload,
+        )
+
+        payload["tool_error"]["hint"] = (
+            "Required string fields: network_id, capability_id. "
+            "capability_id must be a registered GeoLoadST id such as "
+            "topology_centrality. Do not invent topology_analysis. Example: "
+            '{"network_id":"1-MV-urban--0-sw",'
+            '"capability_id":"topology_centrality"}'
+        )
+        received = None if arguments is None else arguments.get("capability_id")
+        if (
+            isinstance(received, str)
+            and received.strip()
+            and not is_allowed_host_capability(received.strip())
+        ):
+            capability_error = unknown_capability_payload(received)
+            payload["error_code"] = capability_error["error_code"]
+            payload["received"] = capability_error["received"]
+            payload["allowed_capabilities"] = capability_error["allowed_capabilities"]
+            payload["tool_error"]["allowed_capabilities"] = capability_error["allowed_capabilities"]
+        else:
+            payload["tool_error"]["allowed_capabilities"] = list(registered_capability_ids())
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))

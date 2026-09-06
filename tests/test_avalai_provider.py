@@ -226,6 +226,36 @@ async def test_native_single_tool_call_parsing():
     assert response.tool_calls[0].arguments == {"query": "public park OSM tag"}
 
 
+async def test_native_mode_recovers_prompted_json_tool_calls_in_content():
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json=_completion(
+                content=(
+                    '{"tool_calls":[{"name":"simbench_query",'
+                    '"arguments":{"network_id":"1-complete_data-mixed-all-1-sw"}}]}'
+                ),
+                finish_reason="stop",
+            ),
+        )
+
+    provider = _provider(handler)
+    response = await provider.chat(
+        [
+            ChatMessage(
+                role="user",
+                content="Load SimBench network and analyze spatial load patterns",
+            )
+        ],
+        tools=_TOOLS,
+    )
+    await provider.aclose()
+    assert response.protocol_error is None
+    assert len(response.tool_calls) == 1
+    assert response.tool_calls[0].name == "simbench_query"
+    assert response.tool_calls[0].arguments == {"network_id": "1-complete_data-mixed-all-1-sw"}
+
+
 async def test_multiple_native_tool_calls():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(

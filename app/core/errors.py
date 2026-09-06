@@ -6,6 +6,8 @@ report failures without leaking internal detail.
 
 from __future__ import annotations
 
+import json
+
 
 class GeoAgentError(Exception):
     """Base class for all application errors."""
@@ -218,6 +220,140 @@ class ToolNotEligibleError(ToolError):
     """The model requested a tool that is registered but not currently eligible."""
 
     code = "tool_not_eligible"
+
+
+class EnergyUnknownCapabilityError(ToolArgumentError):
+    """``capability_id`` is not in the GeoLoadST capability registry."""
+
+    code = "energy_unknown_capability"
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        received: str = "",
+        allowed: tuple[str, ...] = (),
+    ) -> None:
+        super().__init__(message)
+        self.received = received
+        self.allowed_capabilities = allowed
+        self.observation = json.dumps(
+            {
+                "error_code": "unknown_energy_capability",
+                "received": received,
+                "allowed_capabilities": list(allowed),
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+
+
+class EnergyNetworkLoadError(ToolError):
+    """SimBench Connector could not load the requested network id."""
+
+    code = "energy_network_load_failed"
+
+
+class EnergyPluginUnavailableError(ToolError):
+    """The GeoLoadST adapter package is not importable."""
+
+    code = "energy_plugin_unavailable"
+
+    def __init__(self, message: str, *, capability_id: str = "") -> None:
+        super().__init__(message)
+        self.capability_id = capability_id
+        self.observation = _energy_observation(
+            error_code=self.code,
+            message=(
+                "The GeoLoadST plugin is unavailable. Do not retry with a different "
+                "capability_id; another scientific method would not answer the same question."
+            ),
+            capability_id=capability_id,
+            do_not_replan=True,
+        )
+
+
+class EnergyPluginInternalError(ToolError):
+    """Adapter, serialization, or GeoLoadST implementation failed after selection."""
+
+    code = "energy_plugin_internal_error"
+
+    def __init__(self, message: str, *, capability_id: str = "") -> None:
+        super().__init__(message)
+        self.capability_id = capability_id
+        self.observation = _energy_observation(
+            error_code=self.code,
+            message=(
+                "The selected GeoLoadST analysis failed due to an internal plugin or "
+                "engine implementation error. Do not retry with a different "
+                "capability_id; another scientific method would not answer the same question."
+            ),
+            capability_id=capability_id,
+            do_not_replan=True,
+        )
+
+
+class ChartNormalizationError(ToolError):
+    """Chart transformation failed. The scientific analysis itself may still be valid."""
+
+    code = "chart_normalization_error"
+
+
+class EnergyAnalysisInfeasibleError(ToolError):
+    """The selected capability cannot run on the available dataset or binding."""
+
+    code = "energy_analysis_infeasible"
+
+    def __init__(self, message: str, *, capability_id: str = "") -> None:
+        super().__init__(message)
+        self.capability_id = capability_id
+        self.observation = _energy_observation(
+            error_code=self.code,
+            message=(
+                "The selected GeoLoadST capability is not feasible for the available "
+                "data or binding. A different registered capability may be appropriate "
+                "only if it answers the user's original question."
+            ),
+            capability_id=capability_id,
+            do_not_replan=False,
+        )
+
+
+class EnergyAnalysisFailedError(ToolError):
+    """The GeoLoadST adapter ran but did not produce a successful analysis."""
+
+    code = "energy_analysis_failed"
+
+    def __init__(self, message: str, *, capability_id: str = "") -> None:
+        super().__init__(message)
+        self.capability_id = capability_id
+        self.observation = _energy_observation(
+            error_code=self.code,
+            message=(
+                "GeoLoadST analysis failed. Do not invent results and do not switch to "
+                "an unrelated scientific capability unless the observation says the "
+                "selected method was infeasible."
+            ),
+            capability_id=capability_id,
+            do_not_replan=True,
+        )
+
+
+def _energy_observation(
+    *,
+    error_code: str,
+    message: str,
+    capability_id: str = "",
+    do_not_replan: bool = False,
+) -> str:
+    payload: dict[str, object] = {
+        "error_code": error_code,
+        "message": message,
+        "do_not_replan": do_not_replan,
+    }
+    if capability_id:
+        payload["capability_id"] = capability_id
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
 class IngestionError(GeoAgentError):

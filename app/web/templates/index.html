@@ -89,6 +89,26 @@
           <ul id="metrics" class="metrics"></ul>
         </section>
 
+        <section
+          class="card"
+          hidden
+          id="energy-analysis-section"
+          aria-labelledby="energy-analysis-heading"
+        >
+          <h2 id="energy-analysis-heading">Energy Analysis Results</h2>
+          <div id="energy-analysis" class="energy-analysis"></div>
+        </section>
+
+        <section
+          class="card"
+          hidden
+          id="analysis-charts-section"
+          aria-labelledby="analysis-charts-heading"
+        >
+          <h2 id="analysis-charts-heading">Analysis Charts</h2>
+          <div id="analysis-charts" class="analysis-charts"></div>
+        </section>
+
         <section class="card" aria-labelledby="answer-heading">
           <h2 id="answer-heading">Answer</h2>
           <div id="answer-empty" class="empty-state empty-state-branded">
@@ -246,6 +266,19 @@
               <li><span class="legend-swatch legend-line"></span> Lines</li>
               <li><span class="legend-swatch legend-fill"></span> Polygons</li>
               <li><span class="legend-swatch legend-area"></span> Analysis Area</li>
+            </ul>
+            <ul id="map-lisa-legend" class="map-legend map-lisa-legend" hidden aria-label="GeoLoadST LISA">
+              <li class="lisa-legend-title">GeoLoadST LISA:</li>
+              <li><span class="legend-swatch legend-lisa-hh"></span> 🔴 High-High hotspot</li>
+              <li><span class="legend-swatch legend-lisa-ll"></span> 🔵 Low-Low coldspot</li>
+              <li><span class="legend-swatch legend-lisa-hl"></span> 🟠 High-Low outlier</li>
+              <li><span class="legend-swatch legend-lisa-lh"></span> 🟣 Low-High outlier</li>
+            </ul>
+            <ul id="map-energy-legend" class="map-legend map-energy-legend" hidden aria-label="GeoLoadST analysis overlay">
+              <li id="map-energy-legend-title" class="energy-legend-title">GeoLoadST Topology Centrality</li>
+              <li><span class="legend-swatch legend-energy-low"></span> Lower value</li>
+              <li><span class="legend-swatch legend-energy-mid"></span> Medium value</li>
+              <li><span class="legend-swatch legend-energy-high"></span> Higher value</li>
             </ul>
             <ul id="map-target-legend" class="map-legend map-target-legend" hidden aria-label="Comparison targets"></ul>
           </div>

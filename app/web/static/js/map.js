@@ -4,15 +4,36 @@
 
 export const RESULTS_SOURCE_ID = "ariadne-results";
 export const ANALYSIS_SOURCE_ID = "ariadne-analysis-area";
+export const LISA_SOURCE_ID = "ariadne-lisa-clusters";
+export const ENERGY_SOURCE_ID = "ariadne-energy-overlay";
 
 const LAYER_FILL = "ariadne-fill";
 const LAYER_OUTLINE = "ariadne-fill-outline";
 const LAYER_LINE = "ariadne-line";
 const LAYER_POINT = "ariadne-point";
+const LAYER_LISA = "ariadne-lisa-point";
+const LAYER_ENERGY = "ariadne-energy-point";
 const LAYER_ANALYSIS = "ariadne-analysis-outline";
+
+export const ENERGY_SCALE_COLORS = {
+  low: "#22c55e",
+  medium: "#eab308",
+  high: "#dc2626",
+};
+const SIMBENCH_LAYER_NAME = "SimBench Network";
+const DEFAULT_ENERGY_LAYER_NAME = "GeoLoadST Topology Centrality";
+
+export const LISA_CLUSTER_COLORS = {
+  HIGH_HIGH: "#dc2626",
+  LOW_LOW: "#2563eb",
+  HIGH_LOW: "#ea580c",
+  LOW_HIGH: "#7c3aed",
+};
 
 /** Distinct colours for comparison target groups (t1, t2, …). */
 export const TARGET_PALETTE = ["#0f766e", "#c026d3", "#b45309", "#1d4ed8"];
+export const CLUSTER_PALETTE = ["#0f766e", "#c026d3", "#b45309", "#1d4ed8", "#dc2626", "#65a30d"];
+const PCA_LAYER_NAME = "GeoLoadST PCA Clusters";
 const SHARED_COLOR = "#ca8a04";
 const FALLBACK_COLOR = "#38bdf8";
 
@@ -205,6 +226,20 @@ function ensureLayers() {
       data: emptyFeatureCollection(),
     });
   }
+  if (!map.getSource(LISA_SOURCE_ID)) {
+    map.addSource(LISA_SOURCE_ID, {
+      type: "geojson",
+      data: emptyFeatureCollection(),
+      generateId: false,
+    });
+  }
+  if (!map.getSource(ENERGY_SOURCE_ID)) {
+    map.addSource(ENERGY_SOURCE_ID, {
+      type: "geojson",
+      data: emptyFeatureCollection(),
+      generateId: false,
+    });
+  }
 
   // Use legacy $type filters (Polygon also matches MultiPolygon). Do not mix
   // $type with ["geometry-type"] in one filter — that compiles as an
@@ -245,12 +280,71 @@ function ensureLayers() {
     id: LAYER_POINT,
     type: "circle",
     source: RESULTS_SOURCE_ID,
-    filter: ["==", "$type", "Point"],
+    filter: [
+      "all",
+      ["==", "$type", "Point"],
+      ["!=", ["get", "indicator"], "LISA"],
+      ["!=", ["get", "energy_overlay"], "yes"],
+    ],
     paint: {
       "circle-radius": 6,
       "circle-color": targetColorExpression(),
       "circle-opacity": 1,
       "circle-stroke-width": 1.4,
+      "circle-stroke-color": "#0b1220",
+    },
+  });
+  addLayerSafe({
+    id: LAYER_ENERGY,
+    type: "circle",
+    source: ENERGY_SOURCE_ID,
+    filter: ["==", "$type", "Point"],
+    paint: {
+      "circle-radius": [
+        "case",
+        ["!=", ["coalesce", ["get", "cluster_id"], ""], ""],
+        8,
+        [
+          "interpolate",
+          ["linear"],
+          ["to-number", ["coalesce", ["get", "viz_norm"], 0.5]],
+          0,
+          4,
+          1,
+          14,
+        ],
+      ],
+      "circle-color": [
+        "case",
+        ["!=", ["coalesce", ["get", "cluster_color"], ""], ""],
+        ["get", "cluster_color"],
+        [
+          "interpolate",
+          ["linear"],
+          ["to-number", ["coalesce", ["get", "viz_norm"], 0.5]],
+          0,
+          ENERGY_SCALE_COLORS.low,
+          0.5,
+          ENERGY_SCALE_COLORS.medium,
+          1,
+          ENERGY_SCALE_COLORS.high,
+        ],
+      ],
+      "circle-opacity": 0.9,
+      "circle-stroke-width": 1.4,
+      "circle-stroke-color": "#0b1220",
+    },
+  });
+  addLayerSafe({
+    id: LAYER_LISA,
+    type: "circle",
+    source: LISA_SOURCE_ID,
+    filter: ["==", "$type", "Point"],
+    paint: {
+      "circle-radius": 8,
+      "circle-color": lisaColorExpression(),
+      "circle-opacity": 0.92,
+      "circle-stroke-width": 1.6,
       "circle-stroke-color": "#0b1220",
     },
   });
@@ -265,7 +359,7 @@ function ensureLayers() {
     },
   });
 
-  for (const layerId of [LAYER_POINT, LAYER_LINE, LAYER_OUTLINE, LAYER_FILL]) {
+  for (const layerId of [LAYER_ENERGY, LAYER_LISA, LAYER_POINT, LAYER_LINE, LAYER_OUTLINE, LAYER_FILL]) {
     map.off("click", layerId, onFeatureClick);
     map.on("click", layerId, onFeatureClick);
     map.off("mouseenter", layerId, onEnter);
@@ -335,15 +429,26 @@ export function getLastRenderedCollection() {
 
 function applyResults(data) {
   ensureLayers();
+  const split = splitEnergyLayers(data);
   const source = map.getSource(RESULTS_SOURCE_ID);
-  // Paint the full FeatureCollection in one setData. Never replace with a
-  // single-target subset — comparison copies (same osm_id, different target)
-  // must all remain.
-  const painted = mapLibreCollection(data);
+  const lisaSource = map.getSource(LISA_SOURCE_ID);
+  const energySource = map.getSource(ENERGY_SOURCE_ID);
+  // SimBench/OSM stay on the results source. GeoLoadST overlays use dedicated
+  // sources so they are not restyled as a second copy of the network.
+  const painted = mapLibreCollection(split.topology);
+  const lisaPainted = mapLibreLisaCollection(split.lisa);
+  const energyPainted = mapLibreEnergyCollection(split.energy);
   if (source) source.setData(painted);
+  if (lisaSource) lisaSource.setData(lisaPainted);
+  if (energySource) energySource.setData(energyPainted);
   logRenderDiagnostics(data, painted);
-  updateTargetLegend(painted);
-  fitToFeatures(painted);
+  updateCompositionLegend(painted, energyPainted);
+  updateLisaLegend(lisaPainted);
+  updateEnergyLegend(energyPainted);
+  fitToFeatures({
+    type: "FeatureCollection",
+    features: [...painted.features, ...lisaPainted.features, ...energyPainted.features],
+  });
 }
 
 function logRenderDiagnostics(original, painted) {
@@ -367,6 +472,281 @@ function logRenderDiagnostics(original, painted) {
       (id) => map && map.getLayer(id),
     ),
   });
+}
+
+export function isLisaFeature(feature) {
+  const props = flattenFeatureProperties((feature && feature.properties) || {});
+  return (
+    props.indicator === "LISA" ||
+    props.layer_name === "GeoLoadST LISA Clusters" ||
+    ["HIGH_HIGH", "LOW_LOW", "HIGH_LOW", "LOW_HIGH"].includes(String(props.cluster_type || ""))
+  );
+}
+
+export function splitLisaCollection(collection) {
+  const split = splitEnergyLayers(collection);
+  return {
+    topology: {
+      type: "FeatureCollection",
+      features: [...split.topology.features, ...split.energy.features],
+    },
+    lisa: split.lisa,
+  };
+}
+
+export function isEnergyOverlayFeature(feature) {
+  if (isLisaFeature(feature)) return false;
+  const props = flattenFeatureProperties((feature && feature.properties) || {});
+  if (props.energy_overlay === "yes" || props.energy_overlay === true) return true;
+  if (props.analysis === "topology_centrality") return true;
+  if (props.analysis === "multidim_pca_clustering") return true;
+  if (props.layer_name === DEFAULT_ENERGY_LAYER_NAME) return true;
+  if (props.layer_name === PCA_LAYER_NAME) return true;
+  if (props.cluster_id != null && props.cluster_id !== "") return true;
+  return (
+    typeof props.degree_centrality === "number" ||
+    typeof props.betweenness_centrality === "number" ||
+    typeof props.closeness_centrality === "number"
+  );
+}
+
+export function splitEnergyLayers(collection) {
+  const features = collection && Array.isArray(collection.features) ? collection.features : [];
+  const topology = [];
+  const lisa = [];
+  const energy = [];
+  for (const feature of features) {
+    const geometryType = String((feature.geometry && feature.geometry.type) || "").replace(
+      /^Multi/,
+      "",
+    );
+    if (isLisaFeature(feature) && geometryType === "Point") {
+      lisa.push(feature);
+    } else if (isEnergyOverlayFeature(feature) && geometryType === "Point") {
+      energy.push(feature);
+    } else {
+      topology.push(feature);
+    }
+  }
+  return {
+    topology: { type: "FeatureCollection", features: topology },
+    lisa: { type: "FeatureCollection", features: lisa },
+    energy: { type: "FeatureCollection", features: energy },
+  };
+}
+
+function lisaColorExpression() {
+  return [
+    "match",
+    ["upcase", ["to-string", ["coalesce", ["get", "cluster_type"], ""]]],
+    "HIGH_HIGH",
+    LISA_CLUSTER_COLORS.HIGH_HIGH,
+    "LOW_LOW",
+    LISA_CLUSTER_COLORS.LOW_LOW,
+    "HIGH_LOW",
+    LISA_CLUSTER_COLORS.HIGH_LOW,
+    "LOW_HIGH",
+    LISA_CLUSTER_COLORS.LOW_HIGH,
+    FALLBACK_COLOR,
+  ];
+}
+
+function updateLisaLegend(collection) {
+  const list = document.getElementById("map-lisa-legend");
+  if (!list) return;
+  const features = collection && Array.isArray(collection.features) ? collection.features : [];
+  list.hidden = features.length === 0;
+}
+
+export function mapLibreEnergyCollection(collection) {
+  const featuresIn = collection && Array.isArray(collection.features) ? collection.features : [];
+  const values = [];
+  for (const feature of featuresIn) {
+    const props = flattenFeatureProperties((feature && feature.properties) || {});
+    const metric = energyVisualizationMetric(props);
+    const number = finiteNumber(props[metric] != null ? props[metric] : props.value);
+    if (number != null) values.push(number);
+  }
+  const min = values.length ? Math.min(...values) : 0;
+  const max = values.length ? Math.max(...values) : 1;
+  const span = max - min;
+  return {
+    type: "FeatureCollection",
+    features: featuresIn.map((feature, index) => {
+      const props = flattenFeatureProperties((feature && feature.properties) || {});
+      const metric = energyVisualizationMetric(props);
+      const raw = finiteNumber(props[metric] != null ? props[metric] : props.value);
+      const vizNorm = raw == null ? 0.5 : span === 0 ? 0.5 : (raw - min) / span;
+      const layerName = String(props.layer_name || DEFAULT_ENERGY_LAYER_NAME);
+      const clusterId = props.cluster_id == null || props.cluster_id === "" ? "" : String(props.cluster_id);
+      const clusterColor = clusterId === "" ? "" : colorForClusterId(clusterId);
+      return {
+        type: "Feature",
+        id: index + 1,
+        geometry: feature.geometry,
+        properties: {
+          name: String(props.name || `Bus ${props.bus_id || ""}`.trim()),
+          bus_id: props.bus_id != null ? String(props.bus_id) : "",
+          cluster_id: clusterId,
+          cluster_color: clusterColor,
+          degree_centrality: finiteNumber(props.degree_centrality),
+          betweenness_centrality: finiteNumber(props.betweenness_centrality),
+          closeness_centrality: finiteNumber(props.closeness_centrality),
+          analysis: String(props.analysis || (clusterId ? "multidim_pca_clustering" : "topology_centrality")),
+          layer_name: layerName,
+          visualization_metric: metric,
+          value: raw,
+          viz_value: raw,
+          viz_norm: vizNorm,
+          energy_overlay: "yes",
+          in_top_n: props.in_top_n === true || props.in_top_n === "true",
+          top_n: typeof props.top_n === "number" ? props.top_n : null,
+          rank: typeof props.rank === "number" ? props.rank : null,
+          target_id: "",
+          target_label: layerName,
+          analysis_target: layerName,
+          analysis_target_label: layerName,
+        },
+      };
+    }),
+  };
+}
+
+function energyVisualizationMetric(props) {
+  const requested = String(props.visualization_metric || "");
+  if (
+    requested &&
+    finiteNumber(props[requested]) != null
+  ) {
+    return requested;
+  }
+  for (const key of ["betweenness_centrality", "degree_centrality", "closeness_centrality"]) {
+    if (finiteNumber(props[key]) != null) return key;
+  }
+  return "value";
+}
+
+function finiteNumber(value) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function energyLayerName(collection) {
+  const features = collection && Array.isArray(collection.features) ? collection.features : [];
+  for (const feature of features) {
+    const props = flattenFeatureProperties((feature && feature.properties) || {});
+    if (props.layer_name) return String(props.layer_name);
+    if (props.analysis_target_label) return String(props.analysis_target_label);
+  }
+  return DEFAULT_ENERGY_LAYER_NAME;
+}
+
+function colorForClusterId(clusterId) {
+  const numeric = Number(clusterId);
+  if (Number.isFinite(numeric) && numeric >= 0) {
+    return CLUSTER_PALETTE[numeric % CLUSTER_PALETTE.length];
+  }
+  let hash = 0;
+  for (const char of String(clusterId)) hash = (hash + char.charCodeAt(0)) % CLUSTER_PALETTE.length;
+  return CLUSTER_PALETTE[hash];
+}
+
+function updateEnergyLegend(collection) {
+  const list = document.getElementById("map-energy-legend");
+  const title = document.getElementById("map-energy-legend-title");
+  if (!list) return;
+  const features = collection && Array.isArray(collection.features) ? collection.features : [];
+  const clusters = new Map();
+  for (const feature of features) {
+    const props = flattenFeatureProperties((feature && feature.properties) || {});
+    if (props.cluster_id === "" || props.cluster_id == null) continue;
+    const id = String(props.cluster_id);
+    if (!clusters.has(id)) clusters.set(id, props.cluster_color || colorForClusterId(id));
+  }
+  if (clusters.size) {
+    list.replaceChildren();
+    const heading = document.createElement("li");
+    heading.className = "energy-legend-title";
+    heading.id = "map-energy-legend-title";
+    heading.textContent = energyLayerName(collection);
+    list.appendChild(heading);
+    for (const [id, color] of [...clusters.entries()].sort((a, b) => a[0].localeCompare(b[0], undefined, { numeric: true }))) {
+      const li = document.createElement("li");
+      const swatch = document.createElement("span");
+      swatch.className = "legend-swatch legend-target";
+      swatch.style.background = color;
+      swatch.style.borderColor = color;
+      li.appendChild(swatch);
+      li.appendChild(document.createTextNode(`Cluster ${id}`));
+      list.appendChild(li);
+    }
+    list.hidden = false;
+    return;
+  }
+  list.hidden = features.length === 0;
+  if (title && features.length) setLegendTitle(title, energyLayerName(collection));
+}
+
+function setLegendTitle(node, text) {
+  node.textContent = text;
+}
+
+function updateCompositionLegend(topology, energy) {
+  const list = document.getElementById("map-target-legend");
+  if (!list) return;
+  const energyFeatures = energy && Array.isArray(energy.features) ? energy.features : [];
+  if (!energyFeatures.length) {
+    updateTargetLegend(topology);
+    return;
+  }
+  list.replaceChildren();
+  const items = [];
+  const topologyFeatures = topology && Array.isArray(topology.features) ? topology.features : [];
+  if (topologyFeatures.length) {
+    items.push({ label: SIMBENCH_LAYER_NAME, color: TARGET_PALETTE[0] });
+  }
+  items.push({ label: energyLayerName(energy), color: ENERGY_SCALE_COLORS.high });
+  if (items.length < 2) {
+    list.hidden = true;
+    return;
+  }
+  list.hidden = false;
+  for (const item of items) {
+    const li = document.createElement("li");
+    const swatch = document.createElement("span");
+    swatch.className = "legend-swatch legend-target";
+    swatch.style.background = item.color;
+    swatch.style.borderColor = item.color;
+    li.appendChild(swatch);
+    li.appendChild(document.createTextNode(item.label));
+    list.appendChild(li);
+  }
+}
+
+export function mapLibreLisaCollection(collection) {
+  const featuresIn = collection && Array.isArray(collection.features) ? collection.features : [];
+  return {
+    type: "FeatureCollection",
+    features: featuresIn.map((feature, index) => {
+      const props = flattenFeatureProperties((feature && feature.properties) || {});
+      return {
+        type: "Feature",
+        id: index + 1,
+        geometry: feature.geometry,
+        properties: {
+          name: String(props.name || "GeoLoadST LISA Clusters"),
+          cluster_type: String(props.cluster_type || ""),
+          indicator: "LISA",
+          value: typeof props.value === "number" ? props.value : null,
+          p_value: typeof props.p_value === "number" ? props.p_value : null,
+          layer_name: "GeoLoadST LISA Clusters",
+          target_id: "",
+          target_label: "GeoLoadST LISA Clusters",
+          analysis_target: "GeoLoadST LISA Clusters",
+          analysis_target_label: "GeoLoadST LISA Clusters",
+        },
+      };
+    }),
+  };
 }
 
 function targetColorExpression() {
@@ -678,13 +1058,47 @@ function popupHtml(feature) {
   // MapLibre requires HTML strings for popups; every interpolated value is escaped.
   const props = feature.properties || {};
   const tags = readTags(props);
+  if (props.cluster_id) {
+    return popupFromRows([
+      ["Bus ID", props.bus_id || props.name],
+      ["Cluster ID", props.cluster_id],
+      ["Layer", props.layer_name],
+    ]);
+  }
+  if (props.energy_overlay === "yes" || props.analysis === "topology_centrality") {
+    const topN = typeof props.top_n === "number" ? props.top_n : 10;
+    const inTop = props.in_top_n === true || props.in_top_n === "true";
+    const rankNote =
+      inTop && typeof props.rank === "number"
+        ? `Yes (rank ${props.rank} of ${topN})`
+        : inTop
+          ? `Yes (top ${topN})`
+          : `No (not in top ${topN})`;
+    const rows = [
+      ["Bus ID", props.bus_id || props.name],
+      ["Degree centrality", formatPopupNumber(props.degree_centrality)],
+      ["Betweenness centrality", formatPopupNumber(props.betweenness_centrality)],
+      ["Closeness centrality", formatPopupNumber(props.closeness_centrality)],
+      [`In top ${topN}`, rankNote],
+    ];
+    return popupFromRows(rows);
+  }
   const rows = [
     ["Name", tags.name || props.name],
+    ["Layer", props.layer_name],
+    ["Cluster", props.cluster_type],
+    ["Indicator", props.indicator === "LISA" ? "LISA" : ""],
+    ["Value", props.value],
+    ["p-value", props.p_value],
     ["Target", props.analysis_target_label || props.analysis_target || props.target_label],
     ["OSM type", props.osm_type],
     ["OSM ID", props.osm_id],
     ["Primary tag", props.primary_tag || primaryTag(tags)],
   ];
+  return popupFromRows(rows);
+}
+
+function popupFromRows(rows) {
   const parts = ['<div class="map-popup">'];
   for (const [label, value] of rows) {
     if (value == null || value === "") continue;
@@ -697,6 +1111,12 @@ function popupHtml(feature) {
   }
   parts.push("</div>");
   return parts.join("");
+}
+
+function formatPopupNumber(value) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "";
+  if (Number.isInteger(value)) return String(value);
+  return String(Number(value.toPrecision(6)));
 }
 
 function readTags(props) {

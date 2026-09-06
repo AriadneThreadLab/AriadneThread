@@ -11,7 +11,9 @@ from app.llm.ollama import OllamaProvider
 from app.llm.tool_protocol import parse_reply, render_tool_instructions
 from app.llm.tool_schema import normalize_tool_parameters_schema, schema_structure_summary
 from app.osm.query_spec import OsmFeatureQuery
+from app.tools.energy_tools import AnalyzeEnergyGridArgs
 from app.tools.search_osm_knowledge import SearchOsmKnowledgeArgs
+from app.tools.simbench_tools import SimBenchQueryArgs
 from pydantic import ValidationError
 
 
@@ -31,6 +33,16 @@ def _all_tool_defs() -> list[ToolDefinition]:
             "analyze_features",
             "analyze",
             AnalysisPlan.model_json_schema(),
+        ),
+        ToolDefinition(
+            "simbench_query",
+            "simbench",
+            SimBenchQueryArgs.model_json_schema(),
+        ),
+        ToolDefinition(
+            "analyze_energy_grid",
+            "energy",
+            AnalyzeEnergyGridArgs.model_json_schema(),
         ),
     ]
 
@@ -58,7 +70,7 @@ def test_each_registered_tool_schema_normalises():
 
 def test_complete_registry_serialises_for_native_tools():
     encoded = [OllamaProvider._encode_tool(tool) for tool in _all_tool_defs()]
-    assert len(encoded) == 3
+    assert len(encoded) == 5
     for item in encoded:
         assert item["type"] == "function"
         assert set(item["function"]) == {"name", "description", "parameters"}
@@ -79,6 +91,9 @@ def test_prompted_catalogue_is_compact_and_fits_budget():
     assert "analyze_features" in instructions
     assert "query_osm" in instructions
     assert "search_osm_knowledge" in instructions
+    assert "simbench_query" in instructions
+    assert "analyze_energy_grid" in instructions
+    assert "topology_centrality" in instructions
     assert '"limit":20' in instructions
 
 

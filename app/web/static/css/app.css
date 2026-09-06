@@ -813,6 +813,58 @@ button:disabled {
   border: 1px dashed #6366f1;
 }
 
+.map-lisa-legend,
+.map-energy-legend {
+  margin-top: 0.35rem;
+}
+
+.lisa-legend-title {
+  width: 100%;
+  font-weight: 600;
+  color: var(--ink-soft);
+}
+
+.legend-lisa-hh {
+  background: #dc2626;
+  border-radius: 999px;
+}
+
+.legend-lisa-ll {
+  background: #2563eb;
+  border-radius: 999px;
+}
+
+.legend-lisa-hl {
+  background: #ea580c;
+  border-radius: 999px;
+}
+
+.legend-lisa-lh {
+  background: #7c3aed;
+  border-radius: 999px;
+}
+
+.energy-legend-title {
+  width: 100%;
+  font-weight: 600;
+  color: var(--ink-soft);
+}
+
+.legend-energy-low {
+  background: #22c55e;
+  border-radius: 999px;
+}
+
+.legend-energy-mid {
+  background: #eab308;
+  border-radius: 999px;
+}
+
+.legend-energy-high {
+  background: #dc2626;
+  border-radius: 999px;
+}
+
 .map-target-legend {
   margin-top: 0.35rem;
 }
@@ -839,6 +891,209 @@ button:disabled {
   color: #102033;
   font-size: 0.85rem;
   line-height: 1.35;
+}
+
+.energy-analysis {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.energy-meta {
+  display: grid;
+  grid-template-columns: minmax(8rem, 12rem) 1fr;
+  gap: 0.28rem 0.75rem;
+  margin: 0;
+}
+
+.energy-meta dt {
+  margin: 0;
+  font-weight: 600;
+  font-size: 0.78rem;
+  color: var(--ink-soft);
+}
+
+.energy-meta dd {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.energy-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: 0.55rem;
+}
+
+.energy-metric-card {
+  margin: 0;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-muted);
+}
+
+.energy-metric-card h3 {
+  margin: 0 0 0.35rem;
+  font-size: 0.8rem;
+  color: var(--ink);
+}
+
+.energy-metric-card dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.15rem 0.55rem;
+  margin: 0;
+}
+
+.energy-metric-card dt {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+
+.energy-metric-card dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  color: var(--ink-soft);
+}
+
+.energy-table-wrap {
+  overflow-x: auto;
+}
+
+.energy-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+}
+
+.energy-table th,
+.energy-table td {
+  padding: 0.32rem 0.45rem;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+}
+
+.energy-table th {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.energy-table td {
+  font-family: var(--font-mono);
+  color: var(--ink-soft);
+}
+
+.analysis-charts {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.85rem;
+}
+
+@media (min-width: 720px) {
+  .analysis-charts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .analysis-charts .chart-card:only-child {
+    grid-column: 1 / -1;
+  }
+}
+
+.chart-card {
+  min-width: 0;
+  padding: 0.55rem 0.65rem 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-muted);
+}
+
+.chart-card h3 {
+  margin: 0 0 0.4rem;
+  font-size: 0.82rem;
+  color: var(--ink);
+}
+
+.chart-figure {
+  position: relative;
+  margin: 0;
+}
+
+.chart-figure svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-width: 100%;
+}
+
+.chart-bg {
+  fill: #ffffff;
+}
+
+.chart-grid {
+  stroke: #e2e8f0;
+  stroke-width: 1;
+}
+
+.chart-axis {
+  stroke: #94a3b8;
+  stroke-width: 1;
+}
+
+.chart-tick {
+  fill: #64748b;
+  font-size: 9px;
+}
+
+.chart-tick-y {
+  text-anchor: end;
+  dominant-baseline: middle;
+}
+
+.chart-tick-x {
+  text-anchor: middle;
+}
+
+.chart-bar,
+.chart-point {
+  cursor: pointer;
+}
+
+.chart-line {
+  stroke-width: 2;
+}
+
+.chart-tooltip {
+  position: absolute;
+  z-index: 2;
+  max-width: 14rem;
+  padding: 0.2rem 0.4rem;
+  border-radius: 4px;
+  background: #0f172a;
+  color: #f8fafc;
+  font-size: 0.7rem;
+  pointer-events: none;
+}
+
+.chart-axis-caption,
+.chart-provenance {
+  margin: 0.35rem 0 0;
+  color: var(--muted);
+  font-size: 0.7rem;
+  overflow-wrap: anywhere;
+}
+
+.energy-clusters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem 0.85rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.78rem;
+  color: var(--ink-soft);
 }
 
 .report-body {

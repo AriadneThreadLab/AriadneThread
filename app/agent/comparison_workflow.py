@@ -12,6 +12,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.agent.energy_intent import is_energy_grid_request
+
 _COMPARE_HINT = re.compile(
     r"\b("
     r"compare|comparison|which (?:area|one|university|campus)|"
@@ -160,6 +162,8 @@ def is_multi_target_landmark_comparison(message: str) -> bool:
 
 def is_indicator_analysis_request(message: str) -> bool:
     """Whether the comparison/indicator executor should handle this question."""
+    if is_energy_grid_request(message):
+        return False
     if is_multi_target_landmark_comparison(message):
         return True
     if not _COMPARE_HINT.search(message):

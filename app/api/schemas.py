@@ -13,11 +13,15 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.active_learning.contracts import FeedbackSentiment
 from app.agent.contracts import GeoAgentResponse, StopReason, TraceEvent
+from app.analytics.charts import AnalysisChart
 from app.analytics.contracts import AnalysisBlock
 from app.execution_memory.contracts import ExecutionMemoryTrace
 from app.llm.tool_protocol import FINAL_ANSWER_KEY, TOOL_CALL_KEY
 from app.osm.contracts import OSM_ATTRIBUTION, GeoJsonFeatureCollection
 from app.rag.contracts import RetrievedPassage
+from app.tools.energy_report import EnergyAnalysisReport
+from app.tools.energy_tools import ENERGY_ANALYSIS_ATTRIBUTION
+from app.tools.simbench_tools import SIMBENCH_ATTRIBUTION
 
 StopReasonOut = StopReason
 
@@ -156,6 +160,14 @@ class AgentQueryResponse(BaseModel):
     analysis: AnalysisBlock | None = Field(
         default=None,
         description="Present only when analyze_features ran successfully or was rejected.",
+    )
+    energy_analysis: EnergyAnalysisReport | None = Field(
+        default=None,
+        description="Structured GeoLoadST analysis results for the Energy Analysis Results UI.",
+    )
+    charts: list[AnalysisChart] = Field(
+        default_factory=list,
+        description="Structured chart specs from the analysis engine. Empty when absent.",
     )
     conversation_id: str | None = None
     execution_memory: ExecutionMemoryTrace | None = None
@@ -300,10 +312,22 @@ def to_agent_query_response(
     """Map a domain agent result to the public HTTP contract."""
     geojson = result.geojson
     live_data_available = geojson is not None
-    live_query_executed = (
-        live_data_available or bool(result.overpass_query) or result.live_query_failed
+    osm_live = (
+        any(source.kind == "osm_features" for source in result.sources)
+        or bool(result.overpass_query)
+        or result.live_query_failed
     )
-    attribution = OSM_ATTRIBUTION if live_query_executed else None
+    simbench_live = any(source.kind == "simbench_network" for source in result.sources)
+    energy_live = any(source.kind == "energy_analysis" for source in result.sources)
+    live_query_executed = osm_live
+    attribution_parts: list[str] = []
+    if osm_live:
+        attribution_parts.append(OSM_ATTRIBUTION)
+    if simbench_live:
+        attribution_parts.append(SIMBENCH_ATTRIBUTION)
+    if energy_live:
+        attribution_parts.append(ENERGY_ANALYSIS_ATTRIBUTION)
+    attribution = "; ".join(attribution_parts) or None
     answer = sanitize_public_answer(
         result.answer,
         errors=list(result.errors),
@@ -331,6 +355,8 @@ def to_agent_query_response(
         live_query_failed=result.live_query_failed,
         live_error_code=result.live_error_code,
         analysis=result.analysis,
+        energy_analysis=result.energy_analysis,
+        charts=list(result.charts),
         conversation_id=result.conversation_id,
         execution_memory=result.execution_memory,
     )

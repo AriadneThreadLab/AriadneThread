@@ -7,6 +7,7 @@ project's existing SQLAlchemy conventions.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import func, select
@@ -29,9 +30,33 @@ from app.db.session import Database
 STATS_SCAN_LIMIT = 10_000
 
 
+def _as_timestamptz(value: datetime | str | None) -> datetime | None:
+    """Convert JSON-mode ISO strings to aware datetimes for TIMESTAMPTZ columns.
+
+    ``model_dump(mode="json")`` emits values such as ``2026-09-05T14:32:45.346796Z``.
+    asyncpg rejects those strings for ``TIMESTAMP WITH TIME ZONE``.
+    """
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value
+    if not isinstance(value, str):
+        raise TypeError(f"expected datetime or ISO string, got {type(value).__name__}")
+    text = value.strip()
+    if text.endswith(("Z", "z")):
+        text = text[:-1] + "+00:00"
+    parsed = datetime.fromisoformat(text)
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
 def _to_row_values(candidate: ActiveLearningCandidate) -> dict[str, Any]:
     payload = candidate.model_dump(mode="json")
-    payload["observed_at"] = payload.pop("created_at")
+    payload["observed_at"] = _as_timestamptz(payload.pop("created_at"))
+    payload["reviewed_at"] = _as_timestamptz(payload.get("reviewed_at"))
     return payload
 
 

@@ -43,4 +43,5 @@ Documentation and live OSM data stay separate:
 | `search_osm_knowledge` | OSM Wiki passages and citations | Map features |
 | `query_osm` | Live GeoJSON from Overpass | Documentation |
 
-An answer may cite both. Only `query_osm` may populate `geojson`.
+An answer may cite both. Only `query_osm` (OSM) or `simbench_query` (SimBench)
+may populate `geojson`.

@@ -120,7 +120,104 @@ async def test_comparison_report_section_is_present_but_hidden(client: httpx.Asy
     assert "hidden" in html
     js = (await client.get("/static/js/main.js")).text
     assert "renderAnalysis" in js
+    assert "renderEnergyAnalysis" in js
+    assert "renderAnalysisCharts" in js
     assert "comparison-report" in js
+    assert "Energy Analysis Results" in html
+    assert "Analysis Charts" in html
+    assert 'id="energy-analysis-section"' in html
+    assert 'id="analysis-charts-section"' in html
+
+
+async def test_analysis_charts_renderer_handles_bar_line_and_malformed():
+    charts_js = _read("static", "js", "charts.js")
+    html = _INDEX.read_text(encoding="utf-8")
+    assert "export function renderAnalysisChart" in charts_js
+    assert "export function renderAnalysisCharts" in charts_js
+    assert 'id="analysis-charts-section"' in html
+    assert "Analysis Charts" in html
+
+    import subprocess
+    import tempfile
+    from pathlib import Path as _Path
+
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = _Path(tmp)
+            (tmp_path / "charts.mjs").write_text(charts_js, encoding="utf-8")
+            probe = tmp_path / "probe.mjs"
+            probe.write_text(
+                """
+import { isRenderableChart, renderAnalysisCharts, renderAnalysisChart } from "./charts.mjs";
+
+if (typeof document === "undefined") {
+  const makeNode = (name) => {
+    const node = {
+      tagName: String(name).toUpperCase(),
+      className: "",
+      hidden: false,
+      dataset: {},
+      children: [],
+      style: {},
+      textContent: "",
+      attrs: {},
+      appendChild(child) {
+        this.children.push(child);
+        return child;
+      },
+      replaceChildren() {
+        this.children = [];
+      },
+      setAttribute(key, value) {
+        this.attrs[key] = String(value);
+      },
+      addEventListener() {},
+    };
+    return node;
+  };
+  globalThis.document = {
+    createElement(name) {
+      return makeNode(name);
+    },
+    createElementNS(_ns, name) {
+      return makeNode(name);
+    },
+  };
+}
+
+const root = { replaceChildren() { this.cleared = true; }, children: [], cleared: false };
+const none = renderAnalysisCharts([], root, { hidden: false });
+if (none !== 0) throw new Error("empty charts should render nothing");
+
+const bar = {
+  chart_id: "pca_explained_variance",
+  title: "PCA Explained Variance",
+  chart_type: "bar",
+  x_label: "Principal component",
+  y_label: "Explained variance",
+  series: [{ name: "Explained variance", data: [{ x: "PC1", y: 0.61 }, { x: "PC2", y: 0.27 }] }],
+  metadata: { engine: "GeoLoadST", capability_id: "multidim_pca_clustering" },
+};
+const line = {
+  chart_id: "trend",
+  title: "Line",
+  chart_type: "line",
+  series: [{ name: "I", data: [{ x: 1, y: 0.2 }, { x: 2, y: 0.3 }] }],
+};
+if (!isRenderableChart(bar)) throw new Error("bar rejected");
+if (!isRenderableChart(line)) throw new Error("line rejected");
+const bad = { chart_type: "pie", title: "p", series: [] };
+if (isRenderableChart(bad)) throw new Error("malformed accepted");
+const card = renderAnalysisChart(bar);
+if (!card.dataset || card.dataset.chartType !== "bar") throw new Error("bar card missing");
+""",
+                encoding="utf-8",
+            )
+            subprocess.run(["node", probe], check=True, capture_output=True, text=True)
+    except FileNotFoundError:
+        assert "renderAnalysisChart" in charts_js
+    except subprocess.CalledProcessError as exc:
+        raise AssertionError(exc.stderr or exc.stdout) from exc
 
 
 async def test_primary_english_labels_exist(client: httpx.AsyncClient):
@@ -190,7 +287,6 @@ async def test_istanbul_examples_and_initial_map_viewport():
     main_js = _read("static", "js", "main.js")
     map_js = _read("static", "js", "map.js")
     css = _CSS.read_text(encoding="utf-8")
-    assert "Find public parks around Istanbul Technical University." in main_js
     assert "larger proportion of green space" in main_js
     assert "Boğaziçi University" in main_js
     assert "Yıldız Technical University" in main_js  # noqa: RUF001
@@ -255,6 +351,13 @@ async def test_geojson_is_passed_to_map_layer():
     assert "source.setData(painted)" in map_js
     assert 'RESULTS_SOURCE_ID = "ariadne-results"' in map_js
     assert 'ANALYSIS_SOURCE_ID = "ariadne-analysis-area"' in map_js
+    assert 'LISA_SOURCE_ID = "ariadne-lisa-clusters"' in map_js
+    assert 'ENERGY_SOURCE_ID = "ariadne-energy-overlay"' in map_js
+    assert "ariadne-lisa-point" in map_js
+    assert "ariadne-energy-point" in map_js
+    assert "splitLisaCollection" in map_js
+    assert "splitEnergyLayers" in map_js
+    assert "HIGH_HIGH" in map_js
 
 
 async def test_map_layers_cover_point_line_polygon():
@@ -276,10 +379,16 @@ async def test_map_layers_cover_point_line_polygon():
     assert "target_id" in map_js
     assert "analysis_target_label" in map_js
     assert "map-target-legend" in html
+    assert "map-lisa-legend" in html
+    assert "map-energy-legend" in html
+    assert "High-High hotspot" in html
+    assert "Low-Low coldspot" in html
+    assert "High-Low outlier" in html
+    assert "Low-High outlier" in html
     assert "targetsFromCollection" in map_js
     assert "for (const feature of collection.features)" in map_js
     assert "walkCoords" in map_js
-    assert "updateTargetLegend(painted)" in map_js
+    assert "updateCompositionLegend(painted, energyPainted)" in map_js
     assert "flattenFeatureProperties" in map_js
     assert "id: index + 1" in map_js
     assert "generateId: false" in map_js
@@ -300,10 +409,18 @@ async def test_comparison_map_keeps_all_target_features():
     assert "workflow-meta-row" in main_js
     assert "title.title = titleText" in main_js
     assert "source-url" in main_js
+    energy_at = html.find('id="energy-analysis-heading"')
+    charts_at = html.find('id="analysis-charts-heading"')
     answer_at = html.find('id="answer-heading"')
     workflow_at = html.find('id="workflow-heading"')
     sources_at = html.find('id="sources-heading"')
-    assert 0 < answer_at < workflow_at < sources_at
+    assert 0 < energy_at < charts_at < answer_at < workflow_at < sources_at
+    assert "Energy Analysis Results" in html
+    assert "Analysis Charts" in html
+    assert "renderEnergyAnalysis" in main_js
+    assert "renderAnalysisCharts" in main_js
+    section_at = html.find('id="analysis-charts-section"')
+    assert "hidden" in html[max(0, section_at - 80) : section_at]
     assert "workflow-sources-grid" not in html
     assert ".workflow-list," in css or ".workflow-list" in css
     assert "line-clamp: 2" in css
@@ -323,8 +440,13 @@ async def test_comparison_map_keeps_all_target_features():
                 """
 import {
   mapLibreCollection,
+  mapLibreLisaCollection,
+  mapLibreEnergyCollection,
+  splitLisaCollection,
+  splitEnergyLayers,
   targetsFromCollection,
   TARGET_PALETTE,
+  LISA_CLUSTER_COLORS,
 } from "./map.mjs";
 
 const collection = {
@@ -368,6 +490,90 @@ const legend = targetsFromCollection(painted);
 if (legend.length !== 2) throw new Error("legend missing a target");
 if (legend[0].color === legend[1].color) throw new Error("targets share a colour");
 if (!TARGET_PALETTE.includes(legend[0].color)) throw new Error("unexpected colour");
+
+const mixed = {
+  type: "FeatureCollection",
+  features: [
+    {
+      type: "Feature",
+      geometry: { type: "LineString", coordinates: [[10, 53], [11, 54]] },
+      properties: { name: "line", target_id: "t1" },
+    },
+    {
+      type: "Feature",
+      geometry: { type: "Point", coordinates: [10.1, 53.2] },
+      properties: {
+        cluster_type: "HIGH_HIGH",
+        indicator: "LISA",
+        value: 0.82,
+        p_value: 0.01,
+        layer_name: "GeoLoadST LISA Clusters",
+      },
+    },
+  ],
+};
+const split = splitLisaCollection(mixed);
+if (split.topology.features.length !== 1) throw new Error("topology lost");
+if (split.lisa.features.length !== 1) throw new Error("lisa cluster lost");
+if (split.topology.features[0].geometry.type !== "LineString") {
+  throw new Error("lisa was mixed into topology");
+}
+const lisaPainted = mapLibreLisaCollection(split.lisa);
+if (lisaPainted.features[0].properties.cluster_type !== "HIGH_HIGH") {
+  throw new Error("cluster_type stripped");
+}
+if (lisaPainted.features[0].properties.indicator !== "LISA") {
+  throw new Error("indicator stripped");
+}
+if (LISA_CLUSTER_COLORS.HIGH_HIGH !== "#dc2626") throw new Error("hh colour");
+
+const energyMixed = {
+  type: "FeatureCollection",
+  features: [
+    {
+      type: "Feature",
+      geometry: { type: "LineString", coordinates: [[10, 53], [11, 54]] },
+      properties: { name: "line", target_id: "t1", target_label: "SimBench Network" },
+    },
+    {
+      type: "Feature",
+      geometry: { type: "Point", coordinates: [10.1, 53.2] },
+      properties: {
+        bus_id: 7,
+        degree_centrality: 0.2,
+        betweenness_centrality: 0.9,
+        closeness_centrality: 0.4,
+        analysis: "topology_centrality",
+        layer_name: "GeoLoadST Topology Centrality",
+        in_top_n: true,
+        top_n: 10,
+        rank: 1,
+      },
+    },
+  ],
+};
+const energySplit = splitEnergyLayers(energyMixed);
+if (energySplit.topology.features.length !== 1) throw new Error("simbench topology lost");
+if (energySplit.energy.features.length !== 1) throw new Error("energy overlay lost");
+if (energySplit.topology.features[0].geometry.type !== "LineString") {
+  throw new Error("overlay was mixed into the network layer");
+}
+const energyPainted = mapLibreEnergyCollection(energySplit.energy);
+if (energyPainted.features[0].properties.degree_centrality !== 0.2) {
+  throw new Error("degree stripped");
+}
+if (energyPainted.features[0].properties.betweenness_centrality !== 0.9) {
+  throw new Error("betweenness stripped");
+}
+if (energyPainted.features[0].properties.energy_overlay !== "yes") {
+  throw new Error("overlay flag missing");
+}
+if (energyPainted.features[0].properties.layer_name !== "GeoLoadST Topology Centrality") {
+  throw new Error("layer name lost");
+}
+if (energyPainted.features[0].properties.viz_norm !== 0.5) {
+  throw new Error("single-value overlay must keep a mid visualization scale");
+}
 """,
                 encoding="utf-8",
             )

@@ -30,6 +30,14 @@ async def test_health_reports_configuration(client: httpx.AsyncClient):
     assert body["llm_provider"] == "ollama"
     assert body["embedding_model"] == "BAAI/bge-m3"
     assert body["embedding_dim"] == 1024
+    energy = body["geoloadst"]
+    assert "geoloadst_available" in energy
+    assert isinstance(energy["geoloadst_available"], bool)
+    assert "version" in energy
+    assert "moran_lisa" in energy["capabilities"]
+    engine = await client.get("/health/geoloadst")
+    assert engine.status_code == 200
+    assert "moran_lisa" in engine.json()["capabilities"]
 
 
 async def test_health_reports_the_avalai_model_when_selected():
@@ -56,6 +64,7 @@ async def test_health_reports_the_avalai_model_when_selected():
 async def test_openapi_documents_the_health_endpoint(client: httpx.AsyncClient):
     schema = (await client.get("/openapi.json")).json()
     assert "/health" in schema["paths"]
+    assert "/health/geoloadst" in schema["paths"]
     assert "/ready" in schema["paths"]
     assert "/api/v1/agent/query" in schema["paths"]
     assert "/" in schema["paths"]
@@ -72,10 +81,12 @@ async def test_application_state_exposes_shared_resources(settings: Settings):
         assert app.state.settings is settings
         # Registry.names is sorted alphabetically.
         assert app.state.tool_registry.names == (
+            "analyze_energy_grid",
             "analyze_features",
             "query_osm",
             "resolve_place",
             "search_osm_knowledge",
+            "simbench_query",
         )
         assert app.state.query_osm_tool is not None
         assert app.state.llm_provider is not None

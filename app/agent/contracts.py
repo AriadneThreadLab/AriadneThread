@@ -13,10 +13,12 @@ from typing import Any, Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.analytics.charts import AnalysisChart
 from app.analytics.contracts import AnalysisBlock
 from app.execution_memory.contracts import ExecutionMemoryTrace
 from app.osm.contracts import GeoJsonFeatureCollection
 from app.rag.contracts import RetrievedPassage
+from app.tools.energy_report import EnergyAnalysisReport
 
 TraceEventKind = Literal[
     "request_received",
@@ -62,7 +64,7 @@ class SourceReference(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    kind: Literal["osm_documentation", "osm_features"]
+    kind: Literal["osm_documentation", "osm_features", "simbench_network", "energy_analysis"]
     title: str
     url: str | None = None
 
@@ -95,7 +97,7 @@ class GeoAgentResponse(BaseModel):
     trace: list[TraceEvent] = Field(default_factory=list)
     geojson: GeoJsonFeatureCollection | None = Field(
         default=None,
-        description="Live OSM features, present only when query_osm ran successfully.",
+        description="Map features from query_osm or simbench_query; never from documentation.",
     )
     feature_count: int | None = Field(default=None, ge=0)
     passages: list[RetrievedPassage] = Field(default_factory=list)
@@ -112,6 +114,14 @@ class GeoAgentResponse(BaseModel):
     analysis: AnalysisBlock | None = Field(
         default=None,
         description="Present only when analyze_features ran in this request.",
+    )
+    energy_analysis: EnergyAnalysisReport | None = Field(
+        default=None,
+        description="Structured GeoLoadST result cards. Never model-authored numbers.",
+    )
+    charts: list[AnalysisChart] = Field(
+        default_factory=list,
+        description="Deterministic analysis charts. Empty when the engine produced none.",
     )
     conversation_id: str | None = None
     execution_memory: ExecutionMemoryTrace | None = Field(

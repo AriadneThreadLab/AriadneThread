@@ -45,7 +45,7 @@ INDICATOR_ID_PATTERN = r"^[a-z][a-z0-9_]{2,47}$"
 REQUIREMENT_ID_PATTERN = r"^[a-z][a-z0-9_]{2,47}$"
 CATEGORY_ID_PATTERN = r"^[a-z][a-z0-9_]{0,31}$"
 
-DomainId = Literal["core", "green_space", "mobility", "urban_services"]
+DomainId = Literal["core", "green_space", "mobility", "urban_services", "energy_grid"]
 RequirementKind = Literal["osm_features", "reference_point", "analysis_area"]
 RequirementSource = Literal["openstreetmap", "user_input", "derived"]
 FeatureGeometry = Literal["any", "point", "line", "polygon", "positioned"]

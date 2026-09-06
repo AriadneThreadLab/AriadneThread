@@ -30,6 +30,7 @@ from app.core.errors import (
 from app.main import create_app
 from app.osm.contracts import OSM_ATTRIBUTION
 from app.rag.contracts import RetrievedPassage
+from app.tools.simbench_tools import SIMBENCH_ATTRIBUTION
 
 _PASSAGE = RetrievedPassage(
     content="Public parks use leisure=park.",
@@ -200,6 +201,50 @@ async def test_live_osm_response_with_geojson(api_client):
     assert body["overpass_query"]
     assert body["attribution"] == OSM_ATTRIBUTION
     assert body["knowledge_sources"] == []
+
+
+async def test_simbench_geojson_uses_existing_map_field_not_osm_attribution(api_client):
+    http, app = api_client
+    simbench_geojson = {
+        "type": "FeatureCollection",
+        "features": [
+            {
+                "type": "Feature",
+                "geometry": {"type": "Point", "coordinates": [10.1, 53.2]},
+                "properties": {"source": "simbench", "simbench_element": "bus"},
+            }
+        ],
+    }
+    _set_agent(
+        app,
+        FakeAgent(
+            _response(
+                answer="Loaded SimBench network fixture-alpha-1.",
+                geojson=simbench_geojson,
+                feature_count=1,
+                scope_summary="SimBench network fixture-alpha-1: 3 buses, 2 lines",
+                sources=[
+                    SourceReference(
+                        kind="simbench_network",
+                        title="SimBench network fixture-alpha-1",
+                    )
+                ],
+            )
+        ),
+    )
+    response = await http.post(
+        "/api/v1/agent/query",
+        json={"message": "Load SimBench network 1-complete_data-mixed-all-1-sw"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["geojson"]["type"] == "FeatureCollection"
+    assert body["feature_count"] == 1
+    assert body["live_data_available"] is True
+    assert body["live_query_executed"] is False
+    assert body["attribution"] == SIMBENCH_ATTRIBUTION
+    assert OSM_ATTRIBUTION not in (body["attribution"] or "")
+    assert body["overpass_query"] is None
 
 
 async def test_rag_then_overpass_sequence(api_client):

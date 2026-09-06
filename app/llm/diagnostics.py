@@ -17,7 +17,9 @@ from app.llm.factory import build_avalai_provider
 from app.llm.ollama import OllamaConfig, OllamaProvider
 from app.llm.tool_schema import normalize_tool_parameters_schema
 from app.osm.query_spec import OsmFeatureQuery
+from app.tools.energy_tools import AnalyzeEnergyGridArgs
 from app.tools.search_osm_knowledge import SearchOsmKnowledgeArgs
+from app.tools.simbench_tools import SimBenchQueryArgs
 
 _SECRET_TOOL_NAME = "get_secret_test_value"
 _SECRET_TOOL_VALUE = "ariadne-diagnostic-ok"
@@ -73,6 +75,16 @@ def registered_tool_definitions() -> list[ToolDefinition]:
             name="analyze_features",
             description="Run deterministic spatial analytics over request-scoped OSM datasets.",
             parameters_schema=AnalysisPlan.model_json_schema(),
+        ),
+        ToolDefinition(
+            name="simbench_query",
+            description="Load SimBench power-network metadata and map geometries.",
+            parameters_schema=SimBenchQueryArgs.model_json_schema(),
+        ),
+        ToolDefinition(
+            name="analyze_energy_grid",
+            description="Run GeoLoadST analysis on a SimBench network.",
+            parameters_schema=AnalyzeEnergyGridArgs.model_json_schema(),
         ),
     ]
 

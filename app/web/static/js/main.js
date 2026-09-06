@@ -11,6 +11,7 @@ import {
   setText,
 } from "./dom.js";
 import { buildGeoJsonFilename, downloadGeoJson, GEOJSON_MIME, previewGeoJson } from "./download.js";
+import { renderAnalysisCharts } from "./charts.js";
 import {
   clearAnalysisArea,
   clearGeoJson,
@@ -20,7 +21,6 @@ import {
 } from "./map.js";
 
 const EXAMPLE_QUERIES = [
-  "Find public parks around Istanbul Technical University. Return at most 20 features.",
   "Which university has a larger proportion of green space within 2 km: Istanbul Technical University or Boğaziçi University?",
   "Compare road density around Istanbul Technical University and Boğaziçi University.",
   "Add Yıldız Technical University to the previous comparison.",
@@ -121,6 +121,10 @@ function bindElements() {
     "analysis-method",
     "analysis-method-details",
     "analysis-provenance",
+    "energy-analysis-section",
+    "energy-analysis",
+    "analysis-charts-section",
+    "analysis-charts",
   ];
   for (const id of ids) {
     els[id] = document.getElementById(id);
@@ -299,6 +303,10 @@ function resetResultPanels() {
   clearChildren(els["analysis-method"]);
   clearChildren(els["analysis-provenance"]);
   els["analysis-section"].hidden = true;
+  if (els["energy-analysis"]) clearChildren(els["energy-analysis"]);
+  if (els["energy-analysis-section"]) els["energy-analysis-section"].hidden = true;
+  if (els["analysis-charts"]) clearChildren(els["analysis-charts"]);
+  if (els["analysis-charts-section"]) els["analysis-charts-section"].hidden = true;
 }
 
 function renderResult(result) {
@@ -328,6 +336,12 @@ function renderResult(result) {
   const localRender = renderWorkflow(
     Array.isArray(result.execution_trace) ? result.execution_trace : [],
     liveDataAvailable,
+  );
+  renderEnergyAnalysis(result.energy_analysis);
+  renderAnalysisCharts(
+    Array.isArray(result.charts) ? result.charts : [],
+    els["analysis-charts"],
+    els["analysis-charts-section"],
   );
   renderAnalysis(result.analysis, result.execution_memory);
   renderList(els.warnings, els["warnings-section"], result.warnings, "warning");
@@ -551,7 +565,11 @@ function applyStatusBanner(status, result) {
   setUiState("success");
   showBanner(
     "success",
-    result.live_query_executed ? "Live OpenStreetMap results ready." : "Documentation response ready.",
+    result.live_data_available
+      ? "Live map results ready."
+      : result.live_query_executed
+        ? "Live OpenStreetMap results ready."
+        : "Documentation response ready.",
   );
 }
 
@@ -576,6 +594,144 @@ function statusLabel(status) {
     default:
       return "Completed";
   }
+}
+
+const ENERGY_METRIC_COLUMNS = {
+  degree_centrality: "Degree",
+  betweenness_centrality: "Betweenness",
+  closeness_centrality: "Closeness",
+  value: "Value",
+};
+
+function renderEnergyAnalysis(report) {
+  const section = els["energy-analysis-section"];
+  const root = els["energy-analysis"];
+  if (!section || !root) return;
+  clearChildren(root);
+  if (!report || typeof report !== "object") {
+    section.hidden = true;
+    return;
+  }
+  section.hidden = false;
+
+  const meta = document.createElement("dl");
+  meta.className = "energy-meta";
+  addDefinition(meta, "Analysis", report.analysis_name || report.capability_id || "—");
+  addDefinition(meta, "SimBench network", report.network_id || "—");
+  if (typeof report.entity_count === "number") {
+    addDefinition(meta, "Analyzed buses", String(report.entity_count));
+  }
+  if (report.ranked_by) {
+    addDefinition(meta, "Ranked by", energyMetricLabel(report.ranked_by));
+  }
+  root.appendChild(meta);
+
+  const statisticItems = Array.isArray(report.statistic_items) ? report.statistic_items : [];
+  if (statisticItems.length) {
+    const stats = document.createElement("dl");
+    stats.className = "energy-meta";
+    for (const item of statisticItems) {
+      addDefinition(stats, item.label || item.key, formatEnergyNumber(item.value));
+    }
+    root.appendChild(stats);
+  }
+
+  const clusters = report.cluster_counts && typeof report.cluster_counts === "object" ? report.cluster_counts : {};
+  const clusterKeys = Object.keys(clusters);
+  if (clusterKeys.length) {
+    const list = document.createElement("ul");
+    list.className = "energy-clusters";
+    for (const key of clusterKeys) {
+      const li = document.createElement("li");
+      setText(li, `${key.replaceAll("_", "-")}: ${clusters[key]}`);
+      list.appendChild(li);
+    }
+    root.appendChild(list);
+  }
+
+  const summaries = Array.isArray(report.metric_summaries) ? report.metric_summaries : [];
+  if (summaries.length) {
+    const grid = document.createElement("div");
+    grid.className = "energy-metric-grid";
+    for (const summary of summaries) {
+      const card = document.createElement("article");
+      card.className = "energy-metric-card";
+      const heading = document.createElement("h3");
+      setText(heading, summary.label || energyMetricLabel(summary.metric_id));
+      card.appendChild(heading);
+      const dl = document.createElement("dl");
+      addDefinition(dl, "Maximum", formatEnergyNumber(summary.maximum));
+      addDefinition(dl, "Mean", formatEnergyNumber(summary.mean));
+      addDefinition(dl, "Median", formatEnergyNumber(summary.median));
+      if (summary.top_entity_id) {
+        addDefinition(
+          dl,
+          "Top bus",
+          `${summary.top_entity_id}${
+            summary.top_entity_score == null ? "" : ` (${formatEnergyNumber(summary.top_entity_score)})`
+          }`,
+        );
+      }
+      card.appendChild(dl);
+      grid.appendChild(card);
+    }
+    root.appendChild(grid);
+  }
+
+  const ranked = Array.isArray(report.ranked_entities) ? report.ranked_entities : [];
+  const columns = Array.isArray(report.columns) ? report.columns : [];
+  if (ranked.length && columns.length) {
+    const wrap = document.createElement("div");
+    wrap.className = "energy-table-wrap";
+    const table = document.createElement("table");
+    table.className = "energy-table";
+    const head = document.createElement("thead");
+    const headRow = document.createElement("tr");
+    for (const label of ["Bus", ...columns.map(energyMetricLabel)]) {
+      const th = document.createElement("th");
+      setText(th, label);
+      headRow.appendChild(th);
+    }
+    head.appendChild(headRow);
+    table.appendChild(head);
+    const body = document.createElement("tbody");
+    for (const row of ranked) {
+      const tr = document.createElement("tr");
+      const bus = document.createElement("td");
+      setText(bus, row.entity_id || row.label || "—");
+      tr.appendChild(bus);
+      for (const column of columns) {
+        const td = document.createElement("td");
+        const scores = row.scores && typeof row.scores === "object" ? row.scores : {};
+        setText(td, column in scores ? formatEnergyNumber(scores[column]) : "—");
+        tr.appendChild(td);
+      }
+      body.appendChild(tr);
+    }
+    table.appendChild(body);
+    wrap.appendChild(table);
+    root.appendChild(wrap);
+  }
+}
+
+function addDefinition(list, label, value) {
+  if (value == null || value === "") return;
+  const dt = document.createElement("dt");
+  const dd = document.createElement("dd");
+  setText(dt, label);
+  setText(dd, String(value));
+  list.appendChild(dt);
+  list.appendChild(dd);
+}
+
+function energyMetricLabel(metricId) {
+  return ENERGY_METRIC_COLUMNS[metricId] || String(metricId || "").replaceAll("_", " ");
+}
+
+function formatEnergyNumber(value) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "—";
+  if (Number.isInteger(value)) return String(value);
+  return String(Number(value.toPrecision(6)));
 }
 
 function renderAnalysis(analysis, memory) {

@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from importlib import import_module
+from importlib.util import find_spec
 
 import httpx
 from fastapi import APIRouter, Response
@@ -23,6 +25,16 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["system"])
 
 
+class GeoLoadSTHealth(BaseModel):
+    """Energy-engine probe. Never imports OSM tools or GeoLoadST algorithms."""
+
+    model_config = ConfigDict(frozen=True)
+
+    geoloadst_available: bool
+    version: str | None = None
+    capabilities: list[str] = Field(default_factory=list)
+
+
 class HealthResponse(BaseModel):
     """Service liveness and effective configuration summary."""
 
@@ -35,6 +47,7 @@ class HealthResponse(BaseModel):
     llm_provider: str
     embedding_model: str
     embedding_dim: int
+    geoloadst: GeoLoadSTHealth
 
 
 class ReadyCheck(BaseModel):
@@ -62,7 +75,17 @@ async def health(settings: SettingsDep) -> HealthResponse:
         llm_provider=settings.llm_provider,
         embedding_model=settings.bge_model_name,
         embedding_dim=settings.embedding_dim,
+        geoloadst=geoloadst_health(),
     )
+
+
+@router.get(
+    "/health/geoloadst",
+    response_model=GeoLoadSTHealth,
+    summary="GeoLoadST engine health",
+)
+async def geoloadst_health_endpoint() -> GeoLoadSTHealth:
+    return geoloadst_health()
 
 
 @router.get(
@@ -83,6 +106,37 @@ async def ready(
     ok = all(check.ok for check in checks)
     response.status_code = 200 if ok else 503
     return ReadyResponse(status="ready" if ok else "not_ready", checks=checks)
+
+
+def geoloadst_health() -> GeoLoadSTHealth:
+    """Read the plugin health payload. Does not import ``geoloadst`` or OSM clients."""
+    fallback = GeoLoadSTHealth(
+        geoloadst_available=False,
+        version=None,
+        capabilities=["moran_lisa"],
+    )
+    if find_spec("ariadne_geoloadst") is None:
+        return fallback
+    try:
+        module = import_module("ariadne_geoloadst")
+        reporter = getattr(module, "health_status", None)
+        if not callable(reporter):
+            return fallback
+        payload = reporter()
+    except Exception as exc:
+        logger.warning("geoloadst health probe failed: %s", type(exc).__name__)
+        return fallback
+    if not isinstance(payload, dict):
+        return fallback
+    capabilities = [str(item) for item in payload.get("capabilities", ()) if isinstance(item, str)]
+    if "moran_lisa" not in capabilities:
+        capabilities = ["moran_lisa", *capabilities]
+    version = payload.get("version")
+    return GeoLoadSTHealth(
+        geoloadst_available=bool(payload.get("geoloadst_available")),
+        version=version if isinstance(version, str) and version else None,
+        capabilities=capabilities,
+    )
 
 
 async def _check_database(database: Database, *, timeout: float) -> ReadyCheck:

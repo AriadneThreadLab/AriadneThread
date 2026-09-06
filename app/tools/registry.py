@@ -110,6 +110,7 @@ class ToolRegistry:
                 call.name,
                 exc,
                 argument_keys=sorted(str(key) for key in call.arguments),
+                arguments=call.arguments if isinstance(call.arguments, dict) else None,
             )
             return ToolInvocation(
                 call_id=call.id,

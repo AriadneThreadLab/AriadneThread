@@ -17,6 +17,9 @@ class AnalysisRunState:
     accepted_traces: list[MetricSelectionTrace] = field(default_factory=list)
     rejected_traces: list[MetricSelectionTrace] = field(default_factory=list)
     last_plan_primary: str | None = None
+    energy_network_id: str | None = None
+    energy_capability_requested: str | None = None
+    energy_capability_canonical: str | None = None
 
 
 @dataclass(slots=True)
