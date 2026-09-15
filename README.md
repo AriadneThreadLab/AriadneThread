@@ -39,6 +39,47 @@ exposes the workflow and data provenance in the interface.*
 - **Reproducible spatial analysis.** Bounded loops, validated tool arguments,
   and offline tests keep a run checkable after it finishes.
 
+## Advanced Spatio-Temporal Analysis with GeoLoadST
+
+Ariadne Thread now supports advanced spatial and spatio-temporal energy-grid
+analysis through its GeoLoadST integration. GeoLoadST is open-source research
+software for spatial and spatio-temporal analysis of load instability in power
+networks. A dedicated integration layer maps natural-language questions onto
+bounded, named capabilities; the agent selects and orchestrates those
+capabilities, and GeoLoadST performs the deterministic scientific computation.
+
+![Ariadne Thread GeoLoadST integration](images/GeoloadST.png)
+
+*GeoLoadST space-time variogram on a SimBench network: structured metrics,
+semivariogram charts, and the corresponding network on the map.*
+
+Supported GeoLoadST capabilities include:
+
+- Moran's I and LISA spatial autocorrelation
+- space-time variogram / semivariogram analysis
+- network topology and centrality analysis
+- multidimensional load-instability analysis
+- PCA and clustering
+
+A typical energy-grid run is:
+
+1. Natural-language question
+2. Ariadne Thread planning and tool selection
+3. SimBench network data
+4. GeoLoadST deterministic scientific analysis
+5. Structured metrics, maps, and charts
+
+Ariadne Thread provides RAG-based knowledge grounding, controlled tool calling,
+deterministic analytical execution, traceability and provenance, interactive
+geospatial visualization, and an Active Learning pipeline. It does not compute
+Moran's I, variograms, PCA, or other scientific metrics itself.
+
+**[GeoLoadST](https://github.com/GeoLoadSTLab/geoloadst)** —
+<https://github.com/GeoLoadSTLab/geoloadst>
+
+**[Ariadne Thread × GeoLoadST Integration](https://github.com/AriadneThreadLab/AriadneThread-GeoLoadST)** —
+<https://github.com/AriadneThreadLab/AriadneThread-GeoLoadST>
+
 ## System Architecture
 
 A geographic question moves through four layers: interaction, planning and
