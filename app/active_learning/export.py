@@ -7,8 +7,11 @@ active-learning tables.
 Two properties matter most:
 
 * **Authoritative schema.** Assistant targets are validated against the real
-  ``AnalysisPlan`` / ``MultiTargetComparisonPlan`` models before they are
-  written, and the generated JSON Schema travels with the dataset.
+  ``AnalysisPlan`` / ``MultiTargetComparisonPlan`` /
+  ``SolarDecisionLearningTarget`` models before they are written, and the
+  generated JSON Schema travels with the dataset. The solar target is routing
+  and preference labels only; it never carries PVGIS, pvlib, terrain,
+  GIS-distance or MCDA numbers.
 * **Determinism.** For a fixed dataset version and candidate set, the bytes of
   every split file are identical on every run.
 """
@@ -29,8 +32,10 @@ from app.active_learning.contracts import (
     DatasetSplit,
     ExportTask,
     ReviewStatus,
+    TaskType,
 )
 from app.active_learning.novelty import is_near_duplicate
+from app.active_learning.solar import SolarDecisionLearningTarget, learning_target_from_workflow
 from app.agent.comparison_workflow import MultiTargetComparisonPlan
 from app.analytics.contracts import AnalysisPlan
 from app.core.errors import DatasetExportError
@@ -48,6 +53,12 @@ _ANALYSIS_PLAN_INSTRUCTION = (
 _COMPARISON_PLAN_INSTRUCTION = (
     "Return one JSON object matching the Ariadne MultiTargetComparisonPlan schema. "
     "Preserve the landmark names from the request and do not invent coordinates."
+)
+_SOLAR_DECISION_INSTRUCTION = (
+    "Return one JSON object matching the Ariadne SolarDecisionLearningTarget schema. "
+    "Fill intent routing, capability or tool selection, follow-up question fields, "
+    "and preference or ranking labels only. "
+    "Do not compute or copy PVGIS, pvlib, terrain, GIS distance, or MCDA values."
 )
 
 
@@ -146,20 +157,39 @@ def is_exportable(candidate: ActiveLearningCandidate) -> bool:
     return candidate.corrected_output is not None or candidate.outcome_successful
 
 
+def _schema_model(task: ExportTask) -> type[BaseModel]:
+    if task is ExportTask.ANALYSIS_PLAN:
+        return AnalysisPlan
+    if task is ExportTask.SOLAR_DECISION:
+        return SolarDecisionLearningTarget
+    return MultiTargetComparisonPlan
+
+
+def _matches_export_task(candidate: ActiveLearningCandidate, task: ExportTask) -> bool:
+    if task is ExportTask.SOLAR_DECISION:
+        return (
+            candidate.task_type is TaskType.SOLAR_DECISION or candidate.solar_workflow is not None
+        )
+    if task is ExportTask.COMPARISON_PLAN:
+        return candidate.task_type is TaskType.COMPARISON
+    return candidate.task_type is not TaskType.SOLAR_DECISION
+
+
 def _target_payload(candidate: ActiveLearningCandidate, task: ExportTask) -> dict[str, Any] | None:
     # A human correction always wins over the model's original output.
     if candidate.corrected_output is not None:
         return candidate.corrected_output
     if task is ExportTask.ANALYSIS_PLAN:
         return candidate.analysis_plan
+    if task is ExportTask.SOLAR_DECISION:
+        if candidate.solar_workflow is None:
+            return None
+        return learning_target_from_workflow(candidate.solar_workflow).model_dump(mode="json")
     return candidate.comparison_plan
 
 
 def _validated_target(payload: dict[str, Any], task: ExportTask) -> dict[str, Any]:
-    model: type[BaseModel] = (
-        AnalysisPlan if task is ExportTask.ANALYSIS_PLAN else MultiTargetComparisonPlan
-    )
-    return model.model_validate(payload).model_dump(mode="json")
+    return _schema_model(task).model_validate(payload).model_dump(mode="json")
 
 
 def validate_target_payload(payload: dict[str, Any], task: ExportTask) -> dict[str, Any]:
@@ -179,6 +209,8 @@ def _user_content(
 ) -> str:
     if task is ExportTask.COMPARISON_PLAN:
         return f"{candidate.user_query}\n\n{_COMPARISON_PLAN_INSTRUCTION}"
+    if task is ExportTask.SOLAR_DECISION:
+        return f"{candidate.user_query}\n\n{_SOLAR_DECISION_INSTRUCTION}"
     # AnalysisPlan binds targets to backend-generated dataset references, so the
     # prompt must state which references exist. They are rendered from the
     # validated plan itself, never invented at export time.
@@ -266,7 +298,11 @@ def export_dataset(
     if not dataset_version.strip():
         raise DatasetExportError("dataset_version must not be empty")
 
-    eligible = [candidate for candidate in candidates if is_exportable(candidate)]
+    eligible = [
+        candidate
+        for candidate in candidates
+        if is_exportable(candidate) and _matches_export_task(candidate, task)
+    ]
     groups = group_candidates(eligible, near_duplicate_threshold=near_duplicate_threshold)
     group_of: dict[str, str] = {
         candidate.candidate_id: key for key, members in groups.items() for candidate in members
@@ -323,9 +359,7 @@ def export_dataset(
             )
         )
 
-    schema_model: type[BaseModel] = (
-        AnalysisPlan if task is ExportTask.ANALYSIS_PLAN else MultiTargetComparisonPlan
-    )
+    schema_model = _schema_model(task)
     statuses: dict[str, int] = {}
     for entry in lineage:
         statuses[entry.review_status.value] = statuses.get(entry.review_status.value, 0) + 1

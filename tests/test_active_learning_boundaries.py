@@ -31,6 +31,9 @@ TRAINING_PACKAGES = frozenset(
     {"torch", "transformers", "peft", "trl", "bitsandbytes", "accelerate", "datasets"}
 )
 
+#: PV physics engines Active Learning must never import or replace.
+PHYSICS_PACKAGES = frozenset({"pvgis", "pvlib", "solardss"})
+
 
 class FakeAgent:
     def __init__(self, result: GeoAgentResponse) -> None:
@@ -193,6 +196,15 @@ def test_active_learning_never_imports_a_training_stack():
     offenders: dict[str, set[str]] = {}
     for path in sorted((APP_DIR / "active_learning").rglob("*.py")):
         forbidden = _imported_modules(path) & (TRAINING_PACKAGES | {"finetuning"})
+        if forbidden:
+            offenders[path.name] = forbidden
+    assert offenders == {}
+
+
+def test_active_learning_never_imports_pv_physics_engines():
+    offenders: dict[str, set[str]] = {}
+    for path in sorted((APP_DIR / "active_learning").rglob("*.py")):
+        forbidden = _imported_modules(path) & PHYSICS_PACKAGES
         if forbidden:
             offenders[path.name] = forbidden
     assert offenders == {}

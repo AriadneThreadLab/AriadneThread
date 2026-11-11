@@ -26,7 +26,16 @@ def test_parser_accepts_index_command():
     assert args.force is True
 
 
-def test_parser_accepts_search_command():
+def test_parser_accepts_solar_knowledge_commands():
+    parser = build_parser()
+    ingest = parser.parse_args(["ingest-solar-knowledge"])
+    assert ingest.command == "ingest-solar-knowledge"
+    index = parser.parse_args(["index-solar-knowledge", "--force"])
+    assert index.command == "index-solar-knowledge"
+    assert index.force is True
+    search = parser.parse_args(["search-solar-knowledge", "--query", "What does GHI mean?"])
+    assert search.command == "search-solar-knowledge"
+    assert search.query == "What does GHI mean?"
     parser = build_parser()
     args = parser.parse_args(["search-osm-knowledge", "--query", "leisure=park", "--top-k", "3"])
     assert args.command == "search-osm-knowledge"

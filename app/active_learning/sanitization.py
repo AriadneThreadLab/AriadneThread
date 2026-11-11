@@ -77,6 +77,8 @@ def sanitize_payload(value: Any, *, field: str, _depth: int = 0) -> Any:
         }
     if isinstance(value, list):
         return [sanitize_payload(item, field=field, _depth=_depth + 1) for item in value]
+    if isinstance(value, tuple):
+        return [sanitize_payload(item, field=field, _depth=_depth + 1) for item in value]
     if isinstance(value, bool | int | float) or value is None:
         return value
     # Unknown object types are not exportable training data.

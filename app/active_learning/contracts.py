@@ -15,9 +15,14 @@ from typing import Any, Protocol, runtime_checkable
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.active_learning.sanitization import sanitize_payload, sanitize_text
+from app.active_learning.solar import (
+    SolarExpertFeedback,
+    SolarWorkflowSnapshot,
+    learning_target_from_workflow,
+)
 
 #: Bumped when the meaning of stored candidate fields changes.
-CANDIDATE_SCHEMA_VERSION = "active-learning-candidate-1"
+CANDIDATE_SCHEMA_VERSION = "active-learning-candidate-2"
 
 
 class SelectionReason(str, Enum):
@@ -46,6 +51,13 @@ class SelectionReason(str, Enum):
     MODEL_DISAGREEMENT = "MODEL_DISAGREEMENT"
     NOVEL_QUERY = "NOVEL_QUERY"
     SUCCESSFUL_HIGH_VALUE_TRACE = "SUCCESSFUL_HIGH_VALUE_TRACE"
+    SOLAR_RANKING_CORRECTION = "SOLAR_RANKING_CORRECTION"
+    SOLAR_CANDIDATE_ACCEPT_REJECT = "SOLAR_CANDIDATE_ACCEPT_REJECT"
+    SOLAR_PREFERENCE_CORRECTION = "SOLAR_PREFERENCE_CORRECTION"
+    SOLAR_INTENT_MISROUTED = "SOLAR_INTENT_MISROUTED"
+    SOLAR_CAPABILITY_MISSELECTED = "SOLAR_CAPABILITY_MISSELECTED"
+    SOLAR_QUESTION_SELECTION_ISSUE = "SOLAR_QUESTION_SELECTION_ISSUE"
+    SOLAR_RANKING_USEFULNESS_FEEDBACK = "SOLAR_RANKING_USEFULNESS_FEEDBACK"
 
 
 class ReviewStatus(str, Enum):
@@ -72,6 +84,7 @@ class TaskType(str, Enum):
     SPATIAL_SEARCH = "spatial_search"
     COMPARISON = "comparison"
     KNOWLEDGE_ONLY = "knowledge_only"
+    SOLAR_DECISION = "solar_decision"
     UNKNOWN = "unknown"
 
 
@@ -85,14 +98,18 @@ class FeedbackSentiment(str, Enum):
 class ExportTask(str, Enum):
     """Supervised fine-tuning target built from approved candidates.
 
-    Both tasks reuse an authoritative Ariadne schema; no parallel training
-    schema is defined anywhere in this package.
+    Each task reuses an authoritative Ariadne schema; no parallel training
+    schema is defined anywhere in this package. SolarDSS export is routing
+    and preference labels only — never PVGIS, pvlib, terrain, GIS-distance
+    or MCDA numbers.
     """
 
     #: ``AnalysisPlan`` — the validated argument model of ``analyze_features``.
     ANALYSIS_PLAN = "analysis_plan"
     #: ``MultiTargetComparisonPlan`` — the compact comparison planner schema.
     COMPARISON_PLAN = "comparison_plan"
+    #: ``SolarDecisionLearningTarget`` — intent, tools, questions, preferences.
+    SOLAR_DECISION = "solar_decision"
 
 
 class ErrorAttribution(str, Enum):
@@ -187,6 +204,7 @@ class ActiveLearningCandidate(BaseModel):
 
     analysis_plan: dict[str, Any] | None = None
     comparison_plan: dict[str, Any] | None = None
+    solar_workflow: SolarWorkflowSnapshot | None = None
     model_output: str | None = Field(default=None, max_length=8000)
     final_answer: str | None = Field(default=None, max_length=8000)
 
@@ -234,6 +252,22 @@ class ActiveLearningCandidate(BaseModel):
         assert isinstance(cleaned, dict)
         return cleaned
 
+    @field_validator("solar_workflow", mode="before")
+    @classmethod
+    def _clean_solar_workflow(cls, value: object) -> object:
+        if value is None:
+            return None
+        if isinstance(value, SolarWorkflowSnapshot):
+            payload = value.model_dump(mode="json")
+        elif isinstance(value, dict):
+            payload = value
+        else:
+            raise ValueError("solar_workflow must be an object")
+        cleaned = sanitize_payload(payload, field="solar_workflow")
+        if not isinstance(cleaned, dict):
+            raise ValueError("solar_workflow must be an object")
+        return SolarWorkflowSnapshot.model_validate(cleaned)
+
     @field_validator("error_codes", "warnings", "external_error_codes")
     @classmethod
     def _clean_codes(cls, value: list[str]) -> list[str]:
@@ -258,9 +292,11 @@ class ActiveLearningCandidate(BaseModel):
 
     @property
     def training_target(self) -> dict[str, Any] | None:
-        """Human correction wins over the model's own output."""
+        """Human correction wins; solar runs export routing labels, never indicators."""
         if self.corrected_output is not None:
             return self.corrected_output
+        if self.solar_workflow is not None:
+            return learning_target_from_workflow(self.solar_workflow).model_dump(mode="json")
         return self.analysis_plan
 
 
@@ -291,6 +327,7 @@ class FeedbackSubmission(BaseModel):
     sentiment: FeedbackSentiment
     failure_category: str | None = Field(default=None, max_length=64)
     corrected_output: dict[str, Any] | None = None
+    solar_feedback: SolarExpertFeedback | None = None
     note: str | None = Field(default=None, max_length=2000)
 
     @field_validator("note")

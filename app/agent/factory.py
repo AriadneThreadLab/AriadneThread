@@ -7,6 +7,7 @@ from app.agent.orchestrator import PlannerExecutorAgent
 from app.core.config import Settings
 from app.execution_memory.service import ExecutionMemoryService
 from app.llm.contracts import LLMProvider
+from app.solar.store import InMemorySolarDecisionStore
 from app.tools.registry import ToolRegistry
 
 
@@ -22,6 +23,7 @@ def build_geo_agent(
     registry: ToolRegistry,
     settings: Settings,
     execution_memory: ExecutionMemoryService | None = None,
+    solar_store: InMemorySolarDecisionStore | None = None,
 ) -> PlannerExecutorAgent:
     """Build the bounded GeoAgent over the given registry and LLM provider."""
     return PlannerExecutorAgent(
@@ -29,4 +31,5 @@ def build_geo_agent(
         registry,
         build_loop_limits(settings),
         execution_memory,
+        solar_store=solar_store,
     )

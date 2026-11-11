@@ -9,7 +9,9 @@ from app.tools.query_osm import QueryOsmTool
 from app.tools.registry import ToolRegistry
 from app.tools.resolve_place import ResolvePlaceTool
 from app.tools.search_osm_knowledge import SearchOsmKnowledgeTool
+from app.tools.search_solar_knowledge import SearchSolarKnowledgeTool
 from app.tools.simbench_tools import SimBenchQueryTool
+from app.tools.solar_tools import AnalyzeSolarSiteTool
 
 
 def build_tool_registry(
@@ -20,12 +22,14 @@ def build_tool_registry(
     resolve_place_tool: ResolvePlaceTool | None = None,
     simbench_query_tool: SimBenchQueryTool | None = None,
     analyze_energy_grid_tool: AnalyzeEnergyGridTool | None = None,
+    analyze_solar_site_tool: AnalyzeSolarSiteTool | None = None,
     rag_top_k: int = 5,
 ) -> ToolRegistry:
     """Register only tools that have their dependencies available."""
     registry = ToolRegistry()
     if knowledge_retriever is not None:
         registry.register(SearchOsmKnowledgeTool(knowledge_retriever, default_top_k=rag_top_k))
+        registry.register(SearchSolarKnowledgeTool(knowledge_retriever, default_top_k=rag_top_k))
     if resolve_place_tool is not None:
         registry.register(resolve_place_tool)
     if query_osm_tool is not None:
@@ -36,4 +40,6 @@ def build_tool_registry(
         registry.register(simbench_query_tool)
     if analyze_energy_grid_tool is not None:
         registry.register(analyze_energy_grid_tool)
+    if analyze_solar_site_tool is not None:
+        registry.register(analyze_solar_site_tool)
     return registry

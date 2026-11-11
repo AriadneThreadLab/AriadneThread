@@ -106,8 +106,9 @@ class KnowledgeChunk(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 class ActiveLearningCandidateRow(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     """One finished run retained for human review.
 
-    Compact by design: plans, tool sequences and validation outcomes, never
-    GeoJSON payloads, prompts, credentials or model reasoning.
+    Compact by design: plans, SolarDSS routing snapshots, tool sequences and
+    validation outcomes, never GeoJSON payloads, prompts, credentials, model
+    reasoning, or recomputed PV physics.
     """
 
     __tablename__ = "active_learning_candidates"
@@ -139,6 +140,7 @@ class ActiveLearningCandidateRow(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     place_resolution_events: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
     rag_evidence_summary: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     metric_selection: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    solar_workflow: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
     error_codes: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
     warnings: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)

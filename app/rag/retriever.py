@@ -1,4 +1,4 @@
-"""pgvector dense retrieval over the OSM knowledge corpus.
+"""pgvector dense retrieval over whitelisted knowledge corpora.
 
 Score semantics: cosine *similarity* in roughly ``[0, 1]`` for L2-normalised
 BGE-M3 vectors (``similarity = 1 - cosine_distance``). Higher is more relevant.
@@ -18,7 +18,12 @@ from app.core.errors import EmbeddingError, GeoAgentError
 from app.db.models import KnowledgeChunk, KnowledgeDocument
 from app.db.session import Database
 from app.embeddings.contracts import EmbeddingProvider, Vector
-from app.rag.contracts import MAX_RAG_TOP_K, OSM_KNOWLEDGE_DOMAIN, RetrievedPassage
+from app.rag.contracts import (
+    ALLOWED_KNOWLEDGE_DOMAINS,
+    MAX_RAG_TOP_K,
+    OSM_KNOWLEDGE_DOMAIN,
+    RetrievedPassage,
+)
 
 
 class RetrievalError(GeoAgentError):
@@ -38,6 +43,8 @@ class ScoredChunkRow:
     document_title: str
     source_url: str
     cosine_similarity: float
+    domain: str = OSM_KNOWLEDGE_DOMAIN
+    source_type: str | None = None
 
 
 class PassageStore(Protocol):
@@ -79,7 +86,7 @@ class PgVectorPassageStore:
         top_k: int,
     ) -> list[ScoredChunkRow]:
         distance = KnowledgeChunk.embedding.cosine_distance(query_vector)
-        stmt: Select[tuple[UUID, UUID, str, str | None, str, str, float]] = (
+        stmt: Select[tuple[UUID, UUID, str, str | None, str, str, str, str | None, float]] = (
             select(
                 KnowledgeChunk.id,
                 KnowledgeChunk.document_id,
@@ -87,6 +94,8 @@ class PgVectorPassageStore:
                 KnowledgeChunk.section,
                 KnowledgeDocument.title,
                 KnowledgeDocument.source_url,
+                KnowledgeDocument.domain,
+                KnowledgeDocument.source_type,
                 distance.label("cosine_distance"),
             )
             .join(KnowledgeDocument, KnowledgeDocument.id == KnowledgeChunk.document_id)
@@ -105,6 +114,8 @@ class PgVectorPassageStore:
                 document_title=row.title,
                 source_url=row.source_url,
                 cosine_similarity=cosine_similarity_from_distance(row.cosine_distance),
+                domain=row.domain,
+                source_type=row.source_type,
             )
             for row in rows
         ]
@@ -157,8 +168,7 @@ class PgVectorKnowledgeRetriever:
             raise RetrievalError("query must be a non-empty string")
         limit = validate_top_k(top_k)
         effective_domain = domain or self._default_domain
-        if effective_domain != OSM_KNOWLEDGE_DOMAIN:
-            # MVP corpus is a single domain; reject surprise domains early.
+        if effective_domain not in ALLOWED_KNOWLEDGE_DOMAINS:
             raise RetrievalError(f"unsupported knowledge domain: {effective_domain}")
 
         try:
@@ -178,6 +188,8 @@ class PgVectorKnowledgeRetriever:
                 score=row.cosine_similarity,
                 document_id=row.document_id,
                 chunk_id=row.chunk_id,
+                domain=row.domain,
+                source_type=row.source_type,
             )
             for row in rows
         ]

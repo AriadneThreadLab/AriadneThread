@@ -73,6 +73,7 @@ def test_each_recorder_is_independent():
 
 def test_system_prompt_separates_documentation_from_live_data():
     assert "search_osm_knowledge" in SYSTEM_PROMPT
+    assert "search_solar_knowledge" in SYSTEM_PROMPT
     assert "query_osm" in SYSTEM_PROMPT
     assert "Never confuse documentation with live map data." in SYSTEM_PROMPT
     assert "Never invent features" in SYSTEM_PROMPT

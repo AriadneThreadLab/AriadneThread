@@ -54,6 +54,7 @@ include = ["app*"]
 [tool.setuptools.package-data]
 "app.web" = ["templates/*.html", "static/css/*", "static/js/*", "static/img/*"]
 "app.indicators" = ["definitions/*/*.yaml"]
+"app.rag" = ["solar_documents/*.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

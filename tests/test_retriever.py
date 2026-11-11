@@ -121,8 +121,10 @@ async def test_search_tool_is_registered_and_returns_documentation_shape():
     retriever = PgVectorKnowledgeRetriever(store, FakeEmbedder())
     registry = build_tool_registry(knowledge_retriever=retriever, rag_top_k=5)
 
-    assert registry.names == ("search_osm_knowledge",)
-    definition = registry.definitions()[0]
+    assert registry.names == ("search_osm_knowledge", "search_solar_knowledge")
+    definition = next(
+        item for item in registry.definitions() if item.name == "search_osm_knowledge"
+    )
     assert definition.name == "search_osm_knowledge"
     assert "never live map features" in definition.description
 

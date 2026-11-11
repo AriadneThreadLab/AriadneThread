@@ -2,7 +2,8 @@
 
 This package *selects and curates*. It does not train. The only thing it hands
 to the fine-tuning pipeline is a versioned dataset file produced by
-:mod:`app.active_learning.export`.
+:mod:`app.active_learning.export`. It does not recompute PV physics and does
+not replace PVGIS, pvlib, terrain, GIS distances or MCDA formulas.
 """
 
 from __future__ import annotations

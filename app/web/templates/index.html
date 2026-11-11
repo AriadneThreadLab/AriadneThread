@@ -102,14 +102,14 @@
         <section
           class="card"
           hidden
-          id="analysis-charts-section"
-          aria-labelledby="analysis-charts-heading"
+          id="solar-results-section"
+          aria-labelledby="solar-results-heading"
         >
-          <h2 id="analysis-charts-heading">Analysis Charts</h2>
-          <div id="analysis-charts" class="analysis-charts"></div>
+          <h2 id="solar-results-heading">Solar Decision Support Results</h2>
+          <div id="solar-results" class="solar-results"></div>
         </section>
 
-        <section class="card" aria-labelledby="answer-heading">
+        </section class="card" aria-labelledby="answer-heading">
           <h2 id="answer-heading">Answer</h2>
           <div id="answer-empty" class="empty-state empty-state-branded">
             <img
@@ -126,6 +126,43 @@
           <p id="stop-reason" class="stop-reason"></p>
         </section>
 
+        <section
+          class="card"
+          hidden
+          id="agent-questions-section"
+          aria-labelledby="agent-questions-heading"
+        >
+          <h2 id="agent-questions-heading">Agent Questions</h2>
+          <p id="agent-questions-intro" class="hint">
+            The agent needs a few more details to continue this analysis.
+          </p>
+          <ol id="agent-questions-list" class="agent-questions-list"></ol>
+          <form id="agent-questions-form" novalidate>
+            <label class="sr-only" for="agent-questions-input">Reply to the agent</label>
+            <textarea
+              id="agent-questions-input"
+              name="clarification"
+              rows="3"
+              maxlength="2000"
+              required
+              placeholder="Type your answers, then submit to continue this conversation."
+            ></textarea>
+            <div class="form-actions">
+              <button id="agent-questions-submit" type="submit">Submit</button>
+            </div>
+          </form>
+        </section>
+
+        <section
+          class="card"
+          hidden
+          id="analysis-charts-section"
+          aria-labelledby="analysis-charts-heading"
+        >
+          <h2 id="analysis-charts-heading">Analysis Charts</h2>
+          <div id="analysis-charts" class="analysis-charts"></div>
+        </section>
+
         <section class="card workflow-section" aria-labelledby="workflow-heading">
           <h2 id="workflow-heading">Analysis Workflow</h2>
           <p id="workflow-empty" class="empty-state">
@@ -134,8 +171,16 @@
           <ol id="workflow" class="workflow-list" aria-label="Analysis workflow"></ol>
         </section>
 
+        <section id="analytical-evidence-section" class="card" hidden aria-labelledby="analytical-evidence-heading">
+          <h2 id="analytical-evidence-heading">Deterministic Analytical Evidence</h2>
+          <p id="analytical-evidence-empty" class="empty-state">
+            No deterministic analytical evidence for this response.
+          </p>
+          <div id="analytical-evidence" class="sources"></div>
+        </section>
+
         <section id="sources-section" class="card" aria-labelledby="sources-heading">
-          <h2 id="sources-heading">OSM Documentation Sources</h2>
+          <h2 id="sources-heading">Knowledge / Document Evidence</h2>
           <p id="sources-empty" class="empty-state">No documentation sources for this response.</p>
           <div id="sources" class="sources"></div>
         </section>
@@ -280,6 +325,7 @@
               <li><span class="legend-swatch legend-energy-mid"></span> Medium value</li>
               <li><span class="legend-swatch legend-energy-high"></span> Higher value</li>
             </ul>
+            <ul id="map-solar-legend" class="map-legend map-solar-legend" hidden aria-label="Analysis layers"></ul>
             <ul id="map-target-legend" class="map-legend map-target-legend" hidden aria-label="Comparison targets"></ul>
           </div>
           <div id="map" class="map-canvas" role="region" aria-label="Interactive map"></div>

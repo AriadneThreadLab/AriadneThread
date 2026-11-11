@@ -129,10 +129,13 @@ Details: [docs/architecture.md](docs/architecture.md).
 Ariadne Thread combines language reasoning with domain-specific geographic
 knowledge instead of relying only on the model’s internal parameters.
 
-A **whitelisted** OSM Wiki corpus is embedded (BGE-M3) and stored in PostgreSQL
-with pgvector. `search_osm_knowledge` returns scored passages. Those citations
-ground tag choices and appear in the OSM Documentation Sources panel. RAG never
-populates GeoJSON; live features come only from Overpass.
+A **whitelisted** OSM Wiki corpus and a **whitelisted** solar-PV note corpus
+are embedded (BGE-M3) and stored in PostgreSQL with pgvector.
+`search_osm_knowledge` and `search_solar_knowledge` return scored passages.
+Those citations ground tag choices or solar methodology and appear under
+Knowledge / Document Evidence. RAG never populates GeoJSON and never replaces
+SolarDSS indicators. Live features come only from Overpass. Engine numbers stay
+under Deterministic Analytical Evidence.
 
 Details: [docs/rag.md](docs/rag.md).
 

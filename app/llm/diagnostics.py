@@ -19,7 +19,9 @@ from app.llm.tool_schema import normalize_tool_parameters_schema
 from app.osm.query_spec import OsmFeatureQuery
 from app.tools.energy_tools import AnalyzeEnergyGridArgs
 from app.tools.search_osm_knowledge import SearchOsmKnowledgeArgs
+from app.tools.search_solar_knowledge import SearchSolarKnowledgeArgs
 from app.tools.simbench_tools import SimBenchQueryArgs
+from app.tools.solar_tools import AnalyzeSolarSiteArgs
 
 _SECRET_TOOL_NAME = "get_secret_test_value"
 _SECRET_TOOL_VALUE = "ariadne-diagnostic-ok"
@@ -67,6 +69,11 @@ def registered_tool_definitions() -> list[ToolDefinition]:
             parameters_schema=SearchOsmKnowledgeArgs.model_json_schema(),
         ),
         ToolDefinition(
+            name="search_solar_knowledge",
+            description="Search solar-PV methodology and regulatory notes.",
+            parameters_schema=SearchSolarKnowledgeArgs.model_json_schema(),
+        ),
+        ToolDefinition(
             name="query_osm",
             description="Query live OpenStreetMap features via a structured feature query.",
             parameters_schema=OsmFeatureQuery.model_json_schema(),
@@ -85,6 +92,11 @@ def registered_tool_definitions() -> list[ToolDefinition]:
             name="analyze_energy_grid",
             description="Run GeoLoadST analysis on a SimBench network.",
             parameters_schema=AnalyzeEnergyGridArgs.model_json_schema(),
+        ),
+        ToolDefinition(
+            name="analyze_solar_site",
+            description="Route a solar PV decision. Does not compute indicators.",
+            parameters_schema=AnalyzeSolarSiteArgs.model_json_schema(),
         ),
     ]
 

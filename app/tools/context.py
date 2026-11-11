@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from app.analytics.contracts import MetricSelectionTrace
 from app.analytics.datasets import DatasetRegistry
 from app.places.contracts import PlaceRegistry
+
+if TYPE_CHECKING:
+    from app.solar.contracts import SolarDecisionDraft, SolarDecisionStore
 
 
 @dataclass(slots=True)
@@ -20,6 +24,9 @@ class AnalysisRunState:
     energy_network_id: str | None = None
     energy_capability_requested: str | None = None
     energy_capability_canonical: str | None = None
+    solar_capability_requested: str | None = None
+    solar_capability_canonical: str | None = None
+    solar_draft: SolarDecisionDraft | None = None
 
 
 @dataclass(slots=True)
@@ -38,3 +45,5 @@ class ToolContext:
     user_message: str
     places: PlaceRegistry
     grounding: GroundingState
+    conversation_id: str | None = None
+    solar_store: SolarDecisionStore | None = None

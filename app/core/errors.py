@@ -222,6 +222,127 @@ class ToolNotEligibleError(ToolError):
     code = "tool_not_eligible"
 
 
+class SolarUnknownCapabilityError(ToolArgumentError):
+    """``capability_id`` is not in the SolarDSS capability registry."""
+
+    code = "solar_unknown_capability"
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        received: str = "",
+        allowed: tuple[str, ...] = (),
+    ) -> None:
+        super().__init__(message)
+        self.received = received
+        self.allowed_capabilities = allowed
+        self.observation = json.dumps(
+            {
+                "error_code": "unknown_solar_capability",
+                "received": received,
+                "allowed_capabilities": list(allowed),
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+
+
+class SolarPluginUnavailableError(ToolError):
+    """The AriadneThread-Solar plugin is not importable."""
+
+    code = "solar_plugin_unavailable"
+
+    def __init__(self, message: str, *, capability_id: str = "") -> None:
+        super().__init__(message)
+        self.capability_id = capability_id
+        self.observation = _solar_observation(
+            error_code=self.code,
+            message=(
+                "The SolarDSS plugin is unavailable. Do not invent GHI, slope, "
+                "coordinates, or energy yield. OSM tools remain available."
+            ),
+            capability_id=capability_id,
+            do_not_replan=True,
+        )
+
+
+class SolarPluginInternalError(ToolError):
+    """Adapter or SolarDSS implementation failed after selection."""
+
+    code = "solar_plugin_internal_error"
+
+    def __init__(self, message: str, *, capability_id: str = "") -> None:
+        super().__init__(message)
+        self.capability_id = capability_id
+        self.observation = _solar_observation(
+            error_code=self.code,
+            message=(
+                "The selected SolarDSS analysis failed due to an internal plugin or "
+                "engine implementation error. Do not invent scientific numbers."
+            ),
+            capability_id=capability_id,
+            do_not_replan=True,
+        )
+
+
+class SolarAnalysisInfeasibleError(ToolError):
+    """The selected capability cannot run with the available inputs."""
+
+    code = "solar_analysis_infeasible"
+
+    def __init__(self, message: str, *, capability_id: str = "") -> None:
+        super().__init__(message)
+        self.capability_id = capability_id
+        self.observation = _solar_observation(
+            error_code=self.code,
+            message=(
+                "SolarDSS cannot run with the current inputs. Do not invent "
+                "coordinates, grid capacity, or energy yield. Ask only for the "
+                "missing declared parameters."
+            ),
+            capability_id=capability_id,
+            do_not_replan=False,
+        )
+
+
+class SolarAnalysisFailedError(ToolError):
+    """The SolarDSS adapter ran but did not produce a successful analysis."""
+
+    code = "solar_analysis_failed"
+
+    def __init__(self, message: str, *, capability_id: str = "") -> None:
+        super().__init__(message)
+        self.capability_id = capability_id
+        self.observation = _solar_observation(
+            error_code=self.code,
+            message=(
+                "SolarDSS analysis failed. Do not invent results and do not "
+                "switch to an unrelated scientific capability."
+            ),
+            capability_id=capability_id,
+            do_not_replan=True,
+        )
+
+
+def _solar_observation(
+    *,
+    error_code: str,
+    message: str,
+    capability_id: str = "",
+    do_not_replan: bool = False,
+) -> str:
+    payload: dict[str, object] = {
+        "error_code": error_code,
+        "message": message,
+        "do_not_replan": do_not_replan,
+        "science": "not_computed",
+    }
+    if capability_id:
+        payload["capability_id"] = capability_id
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+
 class EnergyUnknownCapabilityError(ToolArgumentError):
     """``capability_id`` is not in the GeoLoadST capability registry."""
 
@@ -372,6 +493,18 @@ class WikiParseError(IngestionError):
     """A wiki response or article body could not be parsed."""
 
     code = "wiki_parse_error"
+
+
+class MarkdownParseError(IngestionError):
+    """A packaged markdown knowledge document could not be parsed."""
+
+    code = "markdown_parse_error"
+
+
+class KnowledgeNumericContentError(IngestionError):
+    """A knowledge document contained forbidden scientific numeric calculations."""
+
+    code = "knowledge_numeric_content_error"
 
 
 class CorpusWhitelistError(IngestionError):

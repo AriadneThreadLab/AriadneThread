@@ -16,9 +16,15 @@ import {
   clearAnalysisArea,
   clearGeoJson,
   initMap,
+  onSolarCandidateSelect,
   setAnalysisArea,
+  setAnalysisLayerCatalog,
   setGeoJson,
+  setSelectedSolarCandidate,
+  SOLAR_LAYER_IDS,
+  splitSolarLayers,
 } from "./map.js";
+import { renderSolarDecisionSupport, selectSolarCandidate } from "./solar-panel.js";
 
 const EXAMPLE_QUERIES = [
   "Which university has a larger proportion of green space within 2 km: Istanbul Technical University or Boğaziçi University?",
@@ -65,6 +71,9 @@ document.addEventListener("DOMContentLoaded", () => {
   setUiState("idle");
   setRequestChip("Ready", "chip-idle");
   initMap("map");
+  onSolarCandidateSelect((candidateId, properties) => {
+    selectSolarCandidate(candidateId, properties);
+  });
   void refreshHealthOnce();
 });
 
@@ -88,6 +97,9 @@ function bindElements() {
     "sources",
     "sources-empty",
     "sources-section",
+    "analytical-evidence",
+    "analytical-evidence-empty",
+    "analytical-evidence-section",
     "workflow",
     "workflow-empty",
     "warnings",
@@ -123,6 +135,13 @@ function bindElements() {
     "analysis-provenance",
     "energy-analysis-section",
     "energy-analysis",
+    "solar-results-section",
+    "solar-results",
+    "agent-questions-section",
+    "agent-questions-list",
+    "agent-questions-form",
+    "agent-questions-input",
+    "agent-questions-submit",
     "analysis-charts-section",
     "analysis-charts",
   ];
@@ -136,6 +155,9 @@ function bindEvents() {
   els["clear-btn"].addEventListener("click", onClear);
   els["copy-query-btn"].addEventListener("click", onCopyQuery);
   els["download-geojson-btn"].addEventListener("click", onDownloadGeoJson);
+  if (els["agent-questions-form"]) {
+    els["agent-questions-form"].addEventListener("submit", onClarificationSubmit);
+  }
 }
 
 function renderExamples() {
@@ -173,12 +195,23 @@ async function refreshHealthOnce() {
 
 async function onSubmit(event) {
   event.preventDefault();
-  if (activeController) return;
-
   const message = els["query-input"].value.trim();
+  await submitConversationMessage(message, { source: "query" });
+}
+
+async function onClarificationSubmit(event) {
+  event.preventDefault();
+  const message = (els["agent-questions-input"] && els["agent-questions-input"].value.trim()) || "";
+  await submitConversationMessage(message, { source: "questions" });
+}
+
+async function submitConversationMessage(message, options) {
+  if (activeController) return;
+  const source = options && options.source === "questions" ? "questions" : "query";
   if (message.length < 2) {
     showBanner("error", "Enter a geographic question before submitting.");
-    els["query-input"].focus();
+    if (source === "questions" && els["agent-questions-input"]) els["agent-questions-input"].focus();
+    else els["query-input"].focus();
     return;
   }
 
@@ -199,6 +232,9 @@ async function onSubmit(event) {
     });
     rememberConversationId(result.conversation_id);
     renderResult(result);
+    if (source === "questions" && els["agent-questions-input"]) {
+      els["agent-questions-input"].value = "";
+    }
   } catch (err) {
     renderRequestFailure(err);
   } finally {
@@ -266,6 +302,9 @@ function resetResultPanels() {
   clearChildren(els.sources);
   els["sources-empty"].hidden = false;
   if (els["sources-section"]) els["sources-section"].hidden = false;
+  if (els["analytical-evidence"]) clearChildren(els["analytical-evidence"]);
+  if (els["analytical-evidence-empty"]) els["analytical-evidence-empty"].hidden = false;
+  if (els["analytical-evidence-section"]) els["analytical-evidence-section"].hidden = true;
   clearChildren(els.workflow);
   els["workflow-empty"].hidden = false;
   clearChildren(els.warnings);
@@ -305,8 +344,11 @@ function resetResultPanels() {
   els["analysis-section"].hidden = true;
   if (els["energy-analysis"]) clearChildren(els["energy-analysis"]);
   if (els["energy-analysis-section"]) els["energy-analysis-section"].hidden = true;
+  if (els["solar-results"]) clearChildren(els["solar-results"]);
+  if (els["solar-results-section"]) els["solar-results-section"].hidden = true;
   if (els["analysis-charts"]) clearChildren(els["analysis-charts"]);
   if (els["analysis-charts-section"]) els["analysis-charts-section"].hidden = true;
+  resetAgentQuestions();
 }
 
 function renderResult(result) {
@@ -332,17 +374,27 @@ function renderResult(result) {
   );
   const liveAttempted = Boolean(result.live_query_executed) || liveFailed || liveDataAvailable;
 
-  renderSources(Array.isArray(result.knowledge_sources) ? result.knowledge_sources : []);
+  renderEvidence(result);
   const localRender = renderWorkflow(
     Array.isArray(result.execution_trace) ? result.execution_trace : [],
     liveDataAvailable,
   );
   renderEnergyAnalysis(result.energy_analysis);
-  renderAnalysisCharts(
-    Array.isArray(result.charts) ? result.charts : [],
-    els["analysis-charts"],
-    els["analysis-charts-section"],
-  );
+  renderSolarDecisionSupport(result.solar_results, els["solar-results"], els["solar-results-section"], {
+    onSelect: (candidateId) => setSelectedSolarCandidate(candidateId),
+  });
+  renderAgentQuestions(result);
+  const chartSpecs = Array.isArray(result.charts) && result.charts.length
+    ? result.charts
+    : result.analysis_result && Array.isArray(result.analysis_result.charts)
+      ? result.analysis_result.charts
+      : [];
+  renderAnalysisCharts(chartSpecs, els["analysis-charts"], els["analysis-charts-section"]);
+  const catalogLayers =
+    result.analysis_result && Array.isArray(result.analysis_result.layers)
+      ? result.analysis_result.layers
+      : [];
+  setAnalysisLayerCatalog(catalogLayers);
   renderAnalysis(result.analysis, result.execution_memory);
   renderList(els.warnings, els["warnings-section"], result.warnings, "warning");
   renderList(els.errors, els["errors-section"], result.errors, "error");
@@ -430,8 +482,14 @@ function renderResult(result) {
   if (count === 0) {
     setText(
       els["map-message"],
-      "The Overpass query completed, but no matching features were found.",
+      collectionHasSolar(collection)
+        ? "The SolarDSS analysis completed, but no geometries were returned."
+        : "The Overpass query completed, but no matching features were found.",
     );
+  } else if (collectionHasSolar(collection) && !collectionHasOsmRemainder(collection)) {
+    setText(els["map-message"], "Displaying SolarDSS geometries returned by the analysis.");
+  } else if (collectionHasSolar(collection)) {
+    setText(els["map-message"], "Displaying live map features, including SolarDSS layers.");
   } else {
     setText(
       els["map-message"],
@@ -901,6 +959,74 @@ function renderAnalysis(analysis, memory) {
   els["analysis-provenance"].appendChild(prov);
 }
 
+function renderEvidence(result) {
+  const evidence = result && result.evidence && typeof result.evidence === "object" ? result.evidence : {};
+  const analytical = Array.isArray(evidence.deterministic_analytical)
+    ? evidence.deterministic_analytical
+    : [];
+  const knowledge = Array.isArray(evidence.knowledge_documents) && evidence.knowledge_documents.length
+    ? evidence.knowledge_documents
+    : Array.isArray(result.knowledge_sources)
+      ? result.knowledge_sources
+      : [];
+  renderAnalyticalEvidence(analytical);
+  renderSources(knowledge);
+}
+
+function renderAnalyticalEvidence(items) {
+  const section = els["analytical-evidence-section"];
+  const list = els["analytical-evidence"];
+  const empty = els["analytical-evidence-empty"];
+  if (!section || !list || !empty) return;
+  clearChildren(list);
+  if (!items.length) {
+    section.hidden = true;
+    empty.hidden = false;
+    return;
+  }
+  section.hidden = false;
+  empty.hidden = true;
+  for (const item of items) {
+    const card = document.createElement("article");
+    card.className = "source-card";
+    const title = document.createElement("h3");
+    title.className = "source-title";
+    const titleText = item.title || item.engine || "Deterministic analytical evidence";
+    setText(title, titleText);
+    title.title = titleText;
+    card.appendChild(title);
+    if (item.engine) {
+      const engine = document.createElement("p");
+      engine.className = "source-section";
+      setText(engine, `Engine: ${item.engine}`);
+      card.appendChild(engine);
+    }
+    if (item.provenance) {
+      const prov = document.createElement("p");
+      prov.className = "source-section";
+      setText(prov, `Provenance: ${item.provenance}`);
+      card.appendChild(prov);
+    }
+    if (item.summary) {
+      const summary = document.createElement("p");
+      summary.className = "source-section";
+      setText(summary, item.summary);
+      card.appendChild(summary);
+    }
+    if (Array.isArray(item.citations) && item.citations.length) {
+      const cites = document.createElement("p");
+      cites.className = "source-score";
+      setText(cites, `Citations: ${item.citations.join(", ")}`);
+      card.appendChild(cites);
+    }
+    const note = document.createElement("p");
+    note.className = "source-score";
+    setText(note, "Not from RAG. Scientific values are never taken from documents.");
+    card.appendChild(note);
+    list.appendChild(card);
+  }
+}
+
 function renderSources(sources) {
   if (els["sources-section"]) els["sources-section"].hidden = false;
   clearChildren(els.sources);
@@ -919,6 +1045,16 @@ function renderSources(sources) {
     setText(title, titleText);
     title.title = titleText;
     item.appendChild(title);
+
+    const kindBits = [];
+    if (source.document_kind) kindBits.push(String(source.document_kind));
+    if (source.domain) kindBits.push(String(source.domain));
+    if (kindBits.length) {
+      const kind = document.createElement("p");
+      kind.className = "source-section";
+      setText(kind, `Knowledge / document evidence: ${kindBits.join(" · ")}`);
+      item.appendChild(kind);
+    }
 
     if (source.section) {
       const section = document.createElement("p");
@@ -1111,6 +1247,16 @@ function updateGeoJsonPreview(collection) {
   els["geojson-preview-note"].hidden = !preview.truncated;
 }
 
+function collectionHasSolar(collection) {
+  const split = splitSolarLayers(collection);
+  return SOLAR_LAYER_IDS.some((layerId) => (split.layers[layerId] || []).length > 0);
+}
+
+function collectionHasOsmRemainder(collection) {
+  const split = splitSolarLayers(collection);
+  return split.remainder.features.length > 0;
+}
+
 function trustedAnalysisScope(result) {
   // Only draw analysis geometry when backend scope summary indicates trusted
   // point/bbox data. Named-place queries stay textual.
@@ -1191,10 +1337,53 @@ function renderRequestFailure(err) {
   els["answer-empty"].hidden = false;
 }
 
+function resetAgentQuestions() {
+  const section = els["agent-questions-section"];
+  const list = els["agent-questions-list"];
+  if (list) clearChildren(list);
+  if (section) section.hidden = true;
+  if (els["agent-questions-input"]) els["agent-questions-input"].value = "";
+}
+
+function renderAgentQuestions(result) {
+  const section = els["agent-questions-section"];
+  const list = els["agent-questions-list"];
+  if (!section || !list) return;
+  clearChildren(list);
+  const questions = collectAgentQuestions(result);
+  if (!questions.length) {
+    section.hidden = true;
+    return;
+  }
+  section.hidden = false;
+  const lead = document.getElementById("agent-questions-intro");
+  if (lead) {
+    setText(lead, "Please provide:");
+  }
+  questions.forEach((item) => {
+    const li = document.createElement("li");
+    const prompt = typeof item.prompt === "string" ? item.prompt : String(item.prompt || "");
+    setText(li, prompt);
+    list.appendChild(li);
+  });
+}
+
+function collectAgentQuestions(result) {
+  if (result && Array.isArray(result.agent_questions) && result.agent_questions.length) {
+    return result.agent_questions.filter((item) => item && typeof item.prompt === "string" && item.prompt.trim());
+  }
+  const solar = result && result.solar_decision && Array.isArray(result.solar_decision.questions)
+    ? result.solar_decision.questions
+    : [];
+  return solar.filter((item) => item && typeof item.prompt === "string" && item.prompt.trim());
+}
+
 function setBusy(busy) {
   els["submit-btn"].disabled = busy;
   els["query-input"].disabled = busy;
   els["submit-btn"].textContent = busy ? "Working…" : "Submit question";
+  if (els["agent-questions-submit"]) els["agent-questions-submit"].disabled = busy;
+  if (els["agent-questions-input"]) els["agent-questions-input"].disabled = busy;
 }
 
 function setUiState(state) {

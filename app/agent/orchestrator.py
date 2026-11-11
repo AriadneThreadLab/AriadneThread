@@ -28,9 +28,11 @@ from app.agent.contracts import (
     summarise_arguments,
 )
 from app.agent.energy_intent import is_energy_grid_request
+from app.agent.evidence import partition_evidence
 from app.agent.loop import LoopBudget, LoopLimits
 from app.agent.planning_diagnostics import diagnostics_log_fields, measure_planning_messages
 from app.agent.prompts import SYSTEM_PROMPT
+from app.agent.solar_intent import is_solar_decision_request, is_solar_request
 from app.agent.spatial_trust import untrusted_spatial_scope_error
 from app.analytics.report import verify_numeric_fidelity
 from app.core.errors import (
@@ -45,6 +47,9 @@ from app.llm.contracts import ChatMessage, LLMProvider, LLMResponse, ToolCall
 from app.llm.prompted_catalogue import render_prompted_tool_instructions
 from app.llm.tool_protocol import FINAL_ANSWER_KEY, TOOL_CALL_KEY
 from app.places.contracts import PlaceRegistry
+from app.rag.contracts import SOLAR_PV_KNOWLEDGE_DOMAIN
+from app.solar.capabilities import safe_logged_solar_ids
+from app.solar.contracts import SolarDecisionStore
 from app.tools.analyze_features import TOOL_NAME as ANALYZE_FEATURES
 from app.tools.context import AnalysisRunState, GroundingState, ToolContext
 from app.tools.energy_capabilities import safe_logged_energy_ids
@@ -53,7 +58,9 @@ from app.tools.query_osm import TOOL_NAME as QUERY_OSM
 from app.tools.registry import ToolRegistry
 from app.tools.resolve_place import TOOL_NAME as RESOLVE_PLACE
 from app.tools.search_osm_knowledge import TOOL_NAME as SEARCH_OSM_KNOWLEDGE
+from app.tools.search_solar_knowledge import TOOL_NAME as SEARCH_SOLAR_KNOWLEDGE
 from app.tools.simbench_tools import TOOL_NAME as SIMBENCH_QUERY
+from app.tools.solar_tools import TOOL_NAME as ANALYZE_SOLAR_SITE
 
 _MAX_PROTOCOL_REPAIRS = 2
 _MAX_IDENTICAL_ARGUMENT_FAILURES = 2
@@ -109,11 +116,13 @@ _PROTOCOL_REPAIR_HINT = json.dumps(
 
 _TOOL_BATCH_ORDER = {
     SEARCH_OSM_KNOWLEDGE: 0,
+    SEARCH_SOLAR_KNOWLEDGE: 0,
     RESOLVE_PLACE: 1,
     QUERY_OSM: 2,
     SIMBENCH_QUERY: 2,
     ANALYZE_FEATURES: 3,
     ANALYZE_ENERGY_GRID: 3,
+    ANALYZE_SOLAR_SITE: 1,
 }
 
 logger = logging.getLogger(__name__)
@@ -128,28 +137,32 @@ class PlannerExecutorAgent:
         registry: ToolRegistry,
         limits: LoopLimits,
         execution_memory: ExecutionMemoryService | None = None,
+        solar_store: SolarDecisionStore | None = None,
     ) -> None:
         self._llm = llm
         self._registry = registry
         self._limits = limits
         self._execution_memory = execution_memory
+        self._solar_store = solar_store
 
     async def run(self, request: GeoAgentRequest) -> GeoAgentResponse:
         recorder = ListTraceRecorder()
         state = ResultAccumulator()
+        conversation_id = (request.conversation_id or "").strip() or str(uuid.uuid4())
         tool_context = ToolContext(
             datasets=state.datasets,
             analysis=AnalysisRunState(),
             user_message=request.message,
             places=PlaceRegistry(),
             grounding=GroundingState(),
+            conversation_id=conversation_id,
+            solar_store=self._solar_store,
         )
         recorder.record(
             "request_received",
             f"received request ({len(request.message)} characters)",
             details={"status": "info"},
         )
-        conversation_id = (request.conversation_id or "").strip() or str(uuid.uuid4())
         incremental = None
         if self._execution_memory is not None:
             try:
@@ -163,7 +176,19 @@ class PlannerExecutorAgent:
 
         use_incremental = incremental is not None
         energy_intent = is_energy_grid_request(request.message)
-        use_fresh_comparison = should_use_multi_target_runner(request.message) and not energy_intent
+        solar_context = False
+        if self._solar_store is not None:
+            loaded = self._solar_store.load(conversation_id)
+            solar_context = loaded is not None
+        solar_intent = is_solar_request(request.message, has_context=solar_context)
+        solar_decision_intent = is_solar_decision_request(
+            request.message, has_context=solar_context
+        )
+        use_fresh_comparison = (
+            should_use_multi_target_runner(request.message)
+            and not energy_intent
+            and not solar_intent
+        )
         if use_incremental or use_fresh_comparison:
             runner = MultiTargetComparisonRunner(self._llm, self._registry)
             try:
@@ -232,6 +257,13 @@ class PlannerExecutorAgent:
                     live_query_failed=False,
                     live_error_code=None,
                     analysis=None,
+                    evidence=partition_evidence(
+                        passages=state.passages,
+                        solar_decision=state.solar_decision,
+                        analysis=state.analysis,
+                        energy_analysis=state.energy_analysis,
+                        solar_results=state.solar_results,
+                    ),
                     conversation_id=conversation_id,
                 )
 
@@ -254,13 +286,17 @@ class PlannerExecutorAgent:
                 state=state,
                 user_message=request.message,
                 places=tool_context.places,
+                solar_intent=solar_intent,
+                solar_decision_intent=solar_decision_intent,
             )
             logger.info(
-                "available_tools round=%s tool_count=%s tool_names=%s energy_intent=%s",
+                "available_tools round=%s tool_count=%s tool_names=%s "
+                "energy_intent=%s solar_intent=%s",
                 llm_round,
                 len(facing),
                 [getattr(item, "name", None) for item in facing],
-                is_energy_grid_request(request.message),
+                energy_intent,
+                solar_intent,
             )
             planning_diag = None
             if llm_round == 1:
@@ -505,7 +541,18 @@ class PlannerExecutorAgent:
             live_error_code=state.live_error_code,
             analysis=state.analysis,
             energy_analysis=state.energy_analysis,
+            solar_decision=state.solar_decision,
+            solar_results=state.solar_results,
+            evidence=partition_evidence(
+                passages=state.passages,
+                solar_decision=state.solar_decision,
+                analysis=state.analysis,
+                energy_analysis=state.energy_analysis,
+                solar_results=state.solar_results,
+            ),
             charts=list(state.charts),
+            analysis_result=state.analysis_result,
+            agent_questions=list(state.agent_questions),
             conversation_id=conversation_id,
         )
         return await self._finish_with_memory(request, result, tool_context, conversation_id)
@@ -813,6 +860,8 @@ def _model_facing_tools(
     state: ResultAccumulator,
     user_message: str,
     places: PlaceRegistry | None = None,
+    solar_intent: bool | None = None,
+    solar_decision_intent: bool | None = None,
 ) -> list[Any]:
     """Filter model-facing tools by current request state.
 
@@ -821,18 +870,39 @@ def _model_facing_tools(
     has_datasets = bool(state.datasets.refs())
     analytical = bool(_ANALYTICAL_INTENT.search(user_message))
     energy = is_energy_grid_request(user_message)
+    solar = is_solar_request(user_message) if solar_intent is None else solar_intent
+    solar_decision = (
+        is_solar_decision_request(user_message)
+        if solar_decision_intent is None
+        else solar_decision_intent
+    )
     has_places = bool(places.refs()) if places is not None else False
     out: list[Any] = []
     for item in definitions:
         name = getattr(item, "name", None)
         if energy and name in {
             SEARCH_OSM_KNOWLEDGE,
+            SEARCH_SOLAR_KNOWLEDGE,
             RESOLVE_PLACE,
             QUERY_OSM,
             ANALYZE_FEATURES,
+            ANALYZE_SOLAR_SITE,
+        }:
+            continue
+        if solar and name in {
+            SEARCH_OSM_KNOWLEDGE,
+            RESOLVE_PLACE,
+            QUERY_OSM,
+            ANALYZE_FEATURES,
+            SIMBENCH_QUERY,
+            ANALYZE_ENERGY_GRID,
         }:
             continue
         if name == ANALYZE_ENERGY_GRID and (not energy or state.energy_workflow_stopped):
+            continue
+        if name == SEARCH_SOLAR_KNOWLEDGE and not solar:
+            continue
+        if name == ANALYZE_SOLAR_SITE and not solar_decision:
             continue
         if name == ANALYZE_FEATURES and not (has_datasets and analytical):
             continue
@@ -867,6 +937,15 @@ def _apply_documentation_grounding(state: ResultAccumulator, tool_context: ToolC
     selected = preferred or hints[:1]
     tool_context.grounding.tags = list(selected)
     state.absorb_grounding_tags(list(selected))
+
+
+def _solar_conversation_context(tool_context: ToolContext) -> bool:
+    if tool_context.analysis.solar_draft is not None:
+        return True
+    if tool_context.solar_store is None:
+        return False
+    conversation_id = (tool_context.conversation_id or "").strip()
+    return bool(conversation_id) and tool_context.solar_store.load(conversation_id) is not None
 
 
 def _pre_invoke_gate(
@@ -914,6 +993,22 @@ def _pre_invoke_gate(
         if not (isinstance(network_id, str) and network_id.strip()) and not has_loaded:
             return ToolNotEligibleError(
                 "analyze_energy_grid is not eligible until simbench_query has loaded a network"
+            )
+        return None
+
+    if call.name == ANALYZE_SOLAR_SITE:
+        has_context = _solar_conversation_context(tool_context)
+        if not is_solar_decision_request(user_message, has_context=has_context):
+            return ToolNotEligibleError(
+                "analyze_solar_site is not eligible for this request (no solar decision intent)"
+            )
+        return None
+
+    if call.name == SEARCH_SOLAR_KNOWLEDGE:
+        has_context = _solar_conversation_context(tool_context)
+        if not is_solar_request(user_message, has_context=has_context):
+            return ToolNotEligibleError(
+                "search_solar_knowledge is not eligible for this request (no solar-PV intent)"
             )
         return None
 
@@ -1055,6 +1150,9 @@ def _fallback_answer(state: ResultAccumulator) -> str:
     if state.feature_count:
         return f"Retrieved {state.feature_count} live OpenStreetMap feature(s)."
     if state.passages:
+        domains = {passage.domain for passage in state.passages}
+        if SOLAR_PV_KNOWLEDGE_DOMAIN in domains and len(domains) == 1:
+            return "Retrieved solar-PV knowledge passages relevant to the request."
         return "Retrieved OSM documentation passages relevant to the request."
     return "No answer was produced."
 
@@ -1072,6 +1170,9 @@ def _tool_call_details(call: ToolCall) -> dict[str, Any]:
         return details
     if call.name == ANALYZE_ENERGY_GRID:
         details.update(safe_logged_energy_ids(args))
+        return details
+    if call.name == ANALYZE_SOLAR_SITE:
+        details.update(safe_logged_solar_ids(args))
         return details
     if call.name == ANALYZE_FEATURES:
         details["analysis_type"] = args.get("analysis_type")

@@ -23,6 +23,7 @@ python3 -m venv .venv
 ./.venv/bin/pip install -e ".[embeddings]"   # if you will index or search the corpus
 ./.venv/bin/pip install -e ".[energy]"       # SimBench data tool
 ./.venv/bin/pip install -e ../AriadneThread-GeoLoadST  # analyze_energy_grid plugin
+./.venv/bin/pip install -e ../AriadneThread-Solar      # analyze_solar_site plugin
 cp .env.example .env
 ```
 
@@ -38,11 +39,14 @@ psql -d osm_geoagent -c "CREATE EXTENSION IF NOT EXISTS vector;"
 ./.venv/bin/alembic upgrade head
 ```
 
-Index the whitelisted OSM Wiki corpus (required for RAG):
+Index the whitelisted OSM Wiki corpus (required for OSM RAG) and the packaged
+solar-PV notes (required for solar-PV RAG):
 
 ```bash
 ./.venv/bin/python -m app.cli ingest-osm-knowledge
 ./.venv/bin/python -m app.cli index-osm-knowledge
+./.venv/bin/python -m app.cli ingest-solar-knowledge
+./.venv/bin/python -m app.cli index-solar-knowledge
 ```
 
 ## Running the backend and frontend

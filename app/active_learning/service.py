@@ -30,6 +30,7 @@ from app.active_learning.contracts import (
     ReviewDecision,
     ReviewStatus,
     SelectionReason,
+    TaskType,
 )
 from app.active_learning.novelty import (
     NoveltyAssessment,
@@ -39,6 +40,15 @@ from app.active_learning.novelty import (
 )
 from app.active_learning.scoring import REASON_WEIGHTS, ActiveLearningScorer, ScoreBreakdown
 from app.active_learning.signals import RunSignals, extract_run_signals
+from app.active_learning.solar import (
+    SolarFeedbackKind,
+    SolarWorkflowSnapshot,
+    empty_solar_workflow,
+    learning_target_from_workflow,
+    merge_expert_feedback,
+    snapshot_solar_workflow,
+    solar_feedback_has_correction,
+)
 from app.agent.contracts import GeoAgentResponse
 from app.core.errors import ReviewTransitionError
 
@@ -65,10 +75,22 @@ class _RecentRun:
     signals: RunSignals
     analysis_plan: dict[str, Any] | None
     comparison_plan: dict[str, Any] | None
+    solar_workflow: SolarWorkflowSnapshot | None
     final_answer: str
     model_id: str
     prompt_version: str
     tool_schema_version: str
+
+
+_SOLAR_FEEDBACK_REASONS: dict[SolarFeedbackKind, SelectionReason] = {
+    SolarFeedbackKind.RANKING_CORRECTION: SelectionReason.SOLAR_RANKING_CORRECTION,
+    SolarFeedbackKind.CANDIDATE_ACCEPT_REJECT: SelectionReason.SOLAR_CANDIDATE_ACCEPT_REJECT,
+    SolarFeedbackKind.PREFERENCE_CORRECTION: SelectionReason.SOLAR_PREFERENCE_CORRECTION,
+    SolarFeedbackKind.INTENT_CLASSIFICATION: SelectionReason.SOLAR_INTENT_MISROUTED,
+    SolarFeedbackKind.CAPABILITY_SELECTION: SelectionReason.SOLAR_CAPABILITY_MISSELECTED,
+    SolarFeedbackKind.MISSING_DATA: SelectionReason.SOLAR_QUESTION_SELECTION_ISSUE,
+    SolarFeedbackKind.RANKING_USEFULNESS: SelectionReason.SOLAR_RANKING_USEFULNESS_FEEDBACK,
+}
 
 
 def _canonical_json(payload: dict[str, Any] | None) -> str | None:
@@ -152,12 +174,18 @@ class ActiveLearningService:
         analysis_plan = (
             response.analysis.plan.model_dump(mode="json") if response.analysis else None
         )
+        solar_workflow = snapshot_solar_workflow(
+            response.solar_decision, tool_sequence=signals.tool_sequence
+        )
+        if solar_workflow is None and signals.task_type is TaskType.SOLAR_DECISION:
+            solar_workflow = empty_solar_workflow(tool_sequence=signals.tool_sequence)
         recent = _RecentRun(
             request_id=request_id,
             user_query=user_query,
             signals=signals,
             analysis_plan=analysis_plan,
             comparison_plan=_comparison_plan_from_trace(response),
+            solar_workflow=solar_workflow,
             final_answer=response.answer,
             model_id=response.model,
             prompt_version=prompt_version,
@@ -202,6 +230,15 @@ class ActiveLearningService:
             extra.add(SelectionReason.USER_NEGATIVE_FEEDBACK)
         if feedback.corrected_output is not None:
             extra.add(SelectionReason.HUMAN_CORRECTION_AVAILABLE)
+        if feedback.solar_feedback is not None:
+            extra.add(_SOLAR_FEEDBACK_REASONS[feedback.solar_feedback.kind])
+            if solar_feedback_has_correction(feedback.solar_feedback):
+                extra.add(SelectionReason.HUMAN_CORRECTION_AVAILABLE)
+            if (
+                feedback.solar_feedback.kind is SolarFeedbackKind.RANKING_USEFULNESS
+                and feedback.solar_feedback.ranking_useful is False
+            ):
+                extra.add(SelectionReason.USER_NEGATIVE_FEEDBACK)
 
         existing = await self._repository.get_by_request(feedback.request_id)
         if existing is not None:
@@ -355,7 +392,16 @@ class ActiveLearningService:
             query_hash=novelty.query_hash,
             analysis_plan=recent.analysis_plan,
             comparison_plan=recent.comparison_plan,
-            model_output=_canonical_json(recent.analysis_plan or recent.comparison_plan),
+            solar_workflow=recent.solar_workflow,
+            model_output=_canonical_json(
+                recent.analysis_plan
+                or recent.comparison_plan
+                or (
+                    learning_target_from_workflow(recent.solar_workflow).model_dump(mode="json")
+                    if recent.solar_workflow is not None
+                    else None
+                )
+            ),
             final_answer=recent.final_answer or None,
             tool_sequence=list(signals.tool_sequence),
             tool_validation_events=list(signals.tool_validation_events),
@@ -390,10 +436,21 @@ class ActiveLearningService:
             candidate.informativeness_score
             + sum(REASON_WEIGHTS.get(reason, 0.0) for reason in extra),
         )
+        workflow = candidate.solar_workflow
+        corrected = feedback.corrected_output or candidate.corrected_output
+        if feedback.solar_feedback is not None:
+            workflow = merge_expert_feedback(
+                workflow,
+                feedback.solar_feedback,
+                tool_sequence=tuple(candidate.tool_sequence),
+            )
+            if corrected is None and solar_feedback_has_correction(feedback.solar_feedback):
+                corrected = learning_target_from_workflow(workflow).model_dump(mode="json")
         update: dict[str, Any] = {
             "selection_reasons": reasons,
             "review_notes": notes,
-            "corrected_output": feedback.corrected_output or candidate.corrected_output,
+            "corrected_output": corrected,
+            "solar_workflow": workflow,
             "informativeness_score": round(rescored, 4),
         }
         if candidate.review_status is not ReviewStatus.EXPORTED:

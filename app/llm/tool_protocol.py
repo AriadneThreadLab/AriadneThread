@@ -43,7 +43,9 @@ _ATTEMPTED_PROTOCOL = re.compile(
     r"\bquery_osm\b|"
     r"\banalyze_features\b|"
     r"\bsimbench_query\b|"
-    r"\banalyze_energy_grid\b"
+    r"\banalyze_energy_grid\b|"
+    r"\banalyze_solar_site\b|"
+    r"\bsearch_solar_knowledge\b"
     r")",
     re.IGNORECASE,
 )
@@ -205,6 +207,7 @@ def _classify_invalid_shape(visible: str, normalised: str, payload: Any | None) 
         "analyze_features",
         "simbench_query",
         "analyze_energy_grid",
+        "analyze_solar_site",
     }:
         return "tool_names_as_top_level_keys"
     if "tool_call" in keys and TOOL_CALL_KEY not in keys:
@@ -319,6 +322,7 @@ def parse_reply(raw_content: str, *, id_prefix: str = "call_") -> ParsedReply:
             "analyze_features",
             "simbench_query",
             "analyze_energy_grid",
+            "analyze_solar_site",
         }:
             parsed = ParsedReply(
                 content="",

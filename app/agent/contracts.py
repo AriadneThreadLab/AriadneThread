@@ -13,11 +13,15 @@ from typing import Any, Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.agent.evidence import EvidencePartition
 from app.analytics.charts import AnalysisChart
 from app.analytics.contracts import AnalysisBlock
+from app.analytics.plugin_result import AgentQuestion, ScientificAnalysisResult
 from app.execution_memory.contracts import ExecutionMemoryTrace
 from app.osm.contracts import GeoJsonFeatureCollection
 from app.rag.contracts import RetrievedPassage
+from app.solar.contracts import SolarDecisionReport
+from app.solar.display import SolarDecisionSupportReport
 from app.tools.energy_report import EnergyAnalysisReport
 
 TraceEventKind = Literal[
@@ -64,7 +68,14 @@ class SourceReference(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    kind: Literal["osm_documentation", "osm_features", "simbench_network", "energy_analysis"]
+    kind: Literal[
+        "osm_documentation",
+        "osm_features",
+        "simbench_network",
+        "energy_analysis",
+        "solar_documentation",
+        "solar_analysis",
+    ]
     title: str
     url: str | None = None
 
@@ -97,7 +108,11 @@ class GeoAgentResponse(BaseModel):
     trace: list[TraceEvent] = Field(default_factory=list)
     geojson: GeoJsonFeatureCollection | None = Field(
         default=None,
-        description="Map features from query_osm or simbench_query; never from documentation.",
+        description=(
+            "Map features from query_osm, simbench_query, analyze_energy_grid, "
+            "or SolarDSS geometry copied through analyze_solar_site; never from "
+            "documentation and never invented."
+        ),
     )
     feature_count: int | None = Field(default=None, ge=0)
     passages: list[RetrievedPassage] = Field(default_factory=list)
@@ -119,9 +134,38 @@ class GeoAgentResponse(BaseModel):
         default=None,
         description="Structured GeoLoadST result cards. Never model-authored numbers.",
     )
+    solar_decision: SolarDecisionReport | None = Field(
+        default=None,
+        description="Structured solar decision slots. Never computed indicators.",
+    )
+    solar_results: SolarDecisionSupportReport | None = Field(
+        default=None,
+        description=(
+            "Copied SolarDSS indicators, candidates, and provenance for the UI. "
+            "Never model-authored numbers."
+        ),
+    )
+    evidence: EvidencePartition = Field(
+        default_factory=EvidencePartition,
+        description=(
+            "DETERMINISTIC ANALYTICAL EVIDENCE versus KNOWLEDGE / DOCUMENT EVIDENCE. "
+            "RAG never fills the analytical list."
+        ),
+    )
     charts: list[AnalysisChart] = Field(
         default_factory=list,
         description="Deterministic analysis charts. Empty when the engine produced none.",
+    )
+    analysis_result: ScientificAnalysisResult | None = Field(
+        default=None,
+        description=(
+            "Unified scientific-plugin envelope. Complements energy_analysis and "
+            "solar_results; never model-authored numbers."
+        ),
+    )
+    agent_questions: list[AgentQuestion] = Field(
+        default_factory=list,
+        description="Structured clarification prompts when a plugin still needs user input.",
     )
     conversation_id: str | None = None
     execution_memory: ExecutionMemoryTrace | None = Field(

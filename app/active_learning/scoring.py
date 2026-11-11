@@ -39,6 +39,13 @@ REASON_WEIGHTS: dict[SelectionReason, float] = {
     # A local model timeout is mostly a hardware/latency fact. It is worth
     # noticing, but it is weak evidence that the weights need to change.
     SelectionReason.MODEL_TIMEOUT: 0.15,
+    SelectionReason.SOLAR_RANKING_CORRECTION: 0.55,
+    SelectionReason.SOLAR_CANDIDATE_ACCEPT_REJECT: 0.55,
+    SelectionReason.SOLAR_PREFERENCE_CORRECTION: 0.50,
+    SelectionReason.SOLAR_INTENT_MISROUTED: 0.40,
+    SelectionReason.SOLAR_CAPABILITY_MISSELECTED: 0.40,
+    SelectionReason.SOLAR_QUESTION_SELECTION_ISSUE: 0.35,
+    SelectionReason.SOLAR_RANKING_USEFULNESS_FEEDBACK: 0.35,
 }
 
 #: Score given to a run whose only failure came from an external dependency.

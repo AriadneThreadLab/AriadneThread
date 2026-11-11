@@ -9,7 +9,8 @@ chain-of-thought.
 | Artifact | Role |
 |---|---|
 | `execution_trace` | Ordered workflow steps: request, planning turns, tool calls, results, stop reason |
-| `knowledge_sources` | OSM Wiki citations used for grounding (title, section, URL, score) |
+| `knowledge_sources` | Documentation citations used for grounding (title, section, URL, score, domain) |
+| `evidence` | Partitioned DETERMINISTIC ANALYTICAL EVIDENCE vs KNOWLEDGE / DOCUMENT EVIDENCE |
 | `overpass_query` | The compiled Overpass QL for the live retrieval (read-only provenance) |
 | `analysis.plan` | The validated analytical plan the tools executed |
 | `analysis.decision_trace` | Domain, candidate indicators, selected indicator, method, and rules |
@@ -26,8 +27,11 @@ tool name, status, scope, tags, limits, and feature counts. A client-side
 “rendered GeoJSON on the map” event is marked as local and is not a model
 decision.
 
-OSM Documentation Sources lists the retrieved Wiki pages. If a follow-up reuses
-previously validated grounding, those citations stay visible. The Comparison
+Knowledge / Document Evidence lists retrieved OSM Wiki pages and solar-PV
+notes. Deterministic Analytical Evidence lists SolarDSS routing and other
+engine outputs. RAG never supplies GHI, slope, or other SolarDSS indicators.
+If a follow-up reuses previously validated grounding, those citations stay
+visible. The Comparison
 Report states the analysis goal, selected indicator, why it was selected,
 per-target values, ranking, units, and data limitations.
 

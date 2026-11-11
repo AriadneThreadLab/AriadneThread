@@ -1,1 +1,1 @@
-"""Retrieval over the local OSM documentation corpus."""
+"""Retrieval over local OSM and solar-PV documentation corpora."""

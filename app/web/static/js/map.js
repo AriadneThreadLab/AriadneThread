@@ -1,11 +1,103 @@
 /**
- * MapLibre rendering for live OSM GeoJSON and trusted analysis scopes.
+ * MapLibre rendering for live OSM GeoJSON, energy overlays, and SolarDSS layers.
  */
 
 export const RESULTS_SOURCE_ID = "ariadne-results";
 export const ANALYSIS_SOURCE_ID = "ariadne-analysis-area";
 export const LISA_SOURCE_ID = "ariadne-lisa-clusters";
 export const ENERGY_SOURCE_ID = "ariadne-energy-overlay";
+export const SOLAR_SOURCE_PREFIX = "ariadne-solar-";
+
+export const SOLAR_LAYER_IDS = [
+  "search_area",
+  "excluded_areas",
+  "candidate_sites",
+  "top_ranked_sites",
+  "solar_resource",
+  "land_cover",
+  "protected_areas",
+  "roads",
+  "power_lines",
+  "substations",
+  "buildings",
+  "selected_site",
+  "suitability",
+  "constraints",
+];
+
+export const SOLAR_LAYER_LABELS = {
+  search_area: "Search Area",
+  excluded_areas: "Excluded Areas",
+  candidate_sites: "Candidate Sites",
+  top_ranked_sites: "Top-ranked Sites",
+  solar_resource: "Solar Resource",
+  land_cover: "Land Cover",
+  protected_areas: "Protected Areas",
+  roads: "Roads",
+  power_lines: "Power Lines",
+  substations: "Substations",
+  buildings: "Buildings",
+  selected_site: "Selected Site",
+  suitability: "Suitability",
+  constraints: "Constraints",
+};
+
+export const SOLAR_LAYER_COLORS = {
+  search_area: "#38bdf8",
+  excluded_areas: "#dc2626",
+  candidate_sites: "#0f766e",
+  top_ranked_sites: "#eab308",
+  solar_resource: "#d97706",
+  land_cover: "#65a30d",
+  protected_areas: "#7c3aed",
+  roads: "#78716c",
+  power_lines: "#1d4ed8",
+  substations: "#b45309",
+  buildings: "#64748b",
+  selected_site: "#f43f5e",
+  suitability: "#15803d",
+  constraints: "#9f1239",
+};
+
+const SOLAR_LAYER_ALIASES = {
+  search_area: "search_area",
+  analysis_extent: "search_area",
+  extent: "search_area",
+  study_area: "search_area",
+  excluded_areas: "excluded_areas",
+  excluded: "excluded_areas",
+  exclusion: "excluded_areas",
+  candidate_sites: "candidate_sites",
+  candidate_polygon: "candidate_sites",
+  "solardss candidates": "candidate_sites",
+  top_ranked_sites: "top_ranked_sites",
+  ranked_sites: "top_ranked_sites",
+  solar_resource: "solar_resource",
+  ghi: "solar_resource",
+  irradiation: "solar_resource",
+  land_cover: "land_cover",
+  landcover: "land_cover",
+  protected_areas: "protected_areas",
+  protected: "protected_areas",
+  roads: "roads",
+  road: "roads",
+  power_lines: "power_lines",
+  power_line: "power_lines",
+  powerline: "power_lines",
+  substations: "substations",
+  substation: "substations",
+  buildings: "buildings",
+  building: "buildings",
+  selected_site: "selected_site",
+  suitability: "suitability",
+  suitability_polygons: "suitability",
+  constraints: "constraints",
+  constraint: "constraints",
+  building_footprint: "buildings",
+  analyzed_building: "buildings",
+};
+
+const TOP_RANKED_MAX = 5;
 
 const LAYER_FILL = "ariadne-fill";
 const LAYER_OUTLINE = "ariadne-fill-outline";
@@ -62,6 +154,28 @@ let pendingAnalysis = null;
 let lastRenderedCollection = null;
 let mapInitStarted = false;
 let rtlPluginPromise = null;
+let solarSelectListener = null;
+let selectedSolarCandidateId = "";
+const solarLayerVisibility = new Map();
+const overlayVisibility = new Map([
+  ["osm_results", true],
+  ["energy_overlay", true],
+  ["lisa_clusters", true],
+]);
+let analysisLayerTitles = new Map();
+
+export function setAnalysisLayerCatalog(layers) {
+  analysisLayerTitles = new Map();
+  if (!Array.isArray(layers)) return;
+  for (const layer of layers) {
+    if (!layer || typeof layer !== "object") continue;
+    const id = String(layer.id || "").trim();
+    if (!id) continue;
+    const title = String(layer.title || id);
+    analysisLayerTitles.set(id, title);
+    if (layer.visible === false) solarLayerVisibility.set(id, false);
+  }
+}
 
 export function initMap(containerId) {
   if (map) return map;
@@ -359,7 +473,18 @@ function ensureLayers() {
     },
   });
 
-  for (const layerId of [LAYER_ENERGY, LAYER_LISA, LAYER_POINT, LAYER_LINE, LAYER_OUTLINE, LAYER_FILL]) {
+  ensureSolarLayers();
+
+  const pointerLayers = [
+    LAYER_ENERGY,
+    LAYER_LISA,
+    LAYER_POINT,
+    LAYER_LINE,
+    LAYER_OUTLINE,
+    LAYER_FILL,
+    ...solarPaintLayerIds(),
+  ];
+  for (const layerId of pointerLayers) {
     map.off("click", layerId, onFeatureClick);
     map.on("click", layerId, onFeatureClick);
     map.off("mouseenter", layerId, onEnter);
@@ -392,6 +517,14 @@ function onFeatureClick(event) {
   const feature = event.features && event.features[0];
   if (!feature || !popup || !map) return;
   popup.setLngLat(event.lngLat).setHTML(popupHtml(feature)).addTo(map);
+  const props = flattenFeatureProperties((feature && feature.properties) || {});
+  const candidateId = props.candidate_id ? String(props.candidate_id) : "";
+  if (candidateId) {
+    setSelectedSolarCandidate(candidateId);
+    if (typeof solarSelectListener === "function") {
+      solarSelectListener(candidateId, props);
+    }
+  }
 }
 
 function onEnter() {
@@ -429,25 +562,35 @@ export function getLastRenderedCollection() {
 
 function applyResults(data) {
   ensureLayers();
-  const split = splitEnergyLayers(data);
+  const energySplit = splitEnergyLayers(data);
+  const solarSplit = splitSolarLayers(energySplit.topology);
   const source = map.getSource(RESULTS_SOURCE_ID);
   const lisaSource = map.getSource(LISA_SOURCE_ID);
   const energySource = map.getSource(ENERGY_SOURCE_ID);
   // SimBench/OSM stay on the results source. GeoLoadST overlays use dedicated
   // sources so they are not restyled as a second copy of the network.
-  const painted = mapLibreCollection(split.topology);
-  const lisaPainted = mapLibreLisaCollection(split.lisa);
-  const energyPainted = mapLibreEnergyCollection(split.energy);
+  const painted = mapLibreCollection(solarSplit.remainder);
+  const lisaPainted = mapLibreLisaCollection(energySplit.lisa);
+  const energyPainted = mapLibreEnergyCollection(energySplit.energy);
   if (source) source.setData(painted);
   if (lisaSource) lisaSource.setData(lisaPainted);
   if (energySource) energySource.setData(energyPainted);
+  const solarPainted = applySolarLayerData(solarSplit.layers);
   logRenderDiagnostics(data, painted);
   updateCompositionLegend(painted, energyPainted);
   updateLisaLegend(lisaPainted);
   updateEnergyLegend(energyPainted);
+  updateSolarLegend(solarSplit.layers);
+  applyOverlayVisibility();
+  applySolarSelectionPaint();
   fitToFeatures({
     type: "FeatureCollection",
-    features: [...painted.features, ...lisaPainted.features, ...energyPainted.features],
+    features: [
+      ...painted.features,
+      ...lisaPainted.features,
+      ...energyPainted.features,
+      ...solarPainted,
+    ],
   });
 }
 
@@ -535,6 +678,414 @@ export function splitEnergyLayers(collection) {
   };
 }
 
+export function solarSourceId(layerId) {
+  return `${SOLAR_SOURCE_PREFIX}${layerId}`;
+}
+
+export function solarFillLayerId(layerId) {
+  return `ariadne-solar-${layerId}-fill`;
+}
+
+export function solarLineLayerId(layerId) {
+  return `ariadne-solar-${layerId}-line`;
+}
+
+export function solarCircleLayerId(layerId) {
+  return `ariadne-solar-${layerId}-circle`;
+}
+
+export function onSolarCandidateSelect(fn) {
+  solarSelectListener = typeof fn === "function" ? fn : null;
+}
+
+export function setSelectedSolarCandidate(candidateId) {
+  selectedSolarCandidateId = candidateId == null ? "" : String(candidateId);
+  applySolarSelectionPaint();
+}
+
+export function getSelectedSolarCandidate() {
+  return selectedSolarCandidateId;
+}
+
+export function isSolarFeature(feature) {
+  return solarLayerIdsForFeature(feature).length > 0;
+}
+
+export function canonicalSolarLayer(feature) {
+  const ids = solarLayerIdsForFeature(feature);
+  return ids.length ? ids[0] : null;
+}
+
+export function solarLayerIdsForFeature(feature) {
+  if (!featureHasGeometry(feature)) return [];
+  const props = flattenFeatureProperties((feature && feature.properties) || {});
+  const ids = [];
+  const push = (layerId) => {
+    if (layerId && SOLAR_LAYER_IDS.includes(layerId) && !ids.includes(layerId)) {
+      ids.push(layerId);
+    }
+  };
+
+  const explicit =
+    aliasSolarLayer(props.analysis_layer) ||
+    aliasSolarLayer(props.solar_layer) ||
+    aliasSolarLayer(props.solar_map_layer) ||
+    aliasSolarLayer(props.layer_type);
+  if (explicit) push(explicit);
+
+  const layerName = String(props.layer_name || "");
+  const genericPluginName = layerName.trim().toLowerCase() === "solardss candidates";
+  if (!genericPluginName) {
+    const named = aliasSolarLayer(layerName);
+    if (named) push(named);
+  }
+
+  if (String(props.layer_type || "").toLowerCase() === "site_point") {
+    if (isSelectedSolarSite(props)) push("selected_site");
+    else push("candidate_sites");
+  }
+  if (isSelectedSolarSite(props)) push("selected_site");
+  const rank = finiteNumber(props.rank);
+  if (rank != null && rank <= TOP_RANKED_MAX && isSolarTagged(props)) {
+    push("top_ranked_sites");
+  }
+  if (explicit === "candidate_sites" || (isSolarTagged(props) && props.candidate_id)) {
+    push("candidate_sites");
+  }
+  if (!ids.length && isSolarTagged(props)) {
+    push("candidate_sites");
+  }
+  return ids;
+}
+
+export function splitSolarLayers(collection) {
+  const features = collection && Array.isArray(collection.features) ? collection.features : [];
+  const remainder = [];
+  const layers = {};
+  for (const layerId of SOLAR_LAYER_IDS) layers[layerId] = [];
+  for (const feature of features) {
+    if (!featureHasGeometry(feature)) continue;
+    const ids = solarLayerIdsForFeature(feature);
+    if (!ids.length) {
+      remainder.push(feature);
+      continue;
+    }
+    for (const layerId of ids) {
+      layers[layerId].push(feature);
+    }
+  }
+  return {
+    remainder: { type: "FeatureCollection", features: remainder },
+    layers,
+  };
+}
+
+export function mapLibreSolarCollection(collection, layerId) {
+  const featuresIn = collection && Array.isArray(collection.features) ? collection.features : [];
+  const values = [];
+  for (const feature of featuresIn) {
+    const props = flattenFeatureProperties((feature && feature.properties) || {});
+    const number = finiteNumber(props.ghi != null ? props.ghi : props.value);
+    if (number != null) values.push(number);
+  }
+  const min = values.length ? Math.min(...values) : 0;
+  const max = values.length ? Math.max(...values) : 1;
+  const span = max - min;
+  return {
+    type: "FeatureCollection",
+    features: featuresIn
+      .filter((feature) => featureHasGeometry(feature))
+      .map((feature, index) => {
+        const props = flattenFeatureProperties((feature && feature.properties) || {});
+        const raw = finiteNumber(props.ghi != null ? props.ghi : props.value);
+        const vizNorm = raw == null ? 0.5 : span === 0 ? 0.5 : (raw - min) / span;
+        const candidateId = props.candidate_id != null ? String(props.candidate_id) : "";
+        return {
+          type: "Feature",
+          id: candidateId || index + 1,
+          geometry: feature.geometry,
+          properties: {
+            name: String(props.name || props.label || candidateId || ""),
+            candidate_id: candidateId,
+            solar_layer: layerId,
+            layer_name: String(props.layer_name || SOLAR_LAYER_LABELS[layerId] || ""),
+            rank: finiteNumber(props.rank),
+            score: finiteNumber(props.score != null ? props.score : props.suitability_score),
+            ghi: finiteNumber(props.ghi != null ? props.ghi : props.ghi_annual),
+            dni: finiteNumber(props.dni),
+            slope: finiteNumber(props.slope),
+            available_area: finiteNumber(
+              props.available_area != null ? props.available_area : props.area_m2,
+            ),
+            distance_to_grid: finiteNumber(
+              props.distance_to_grid != null ? props.distance_to_grid : props.distance_to_grid_m,
+            ),
+            distance_to_road: finiteNumber(
+              props.distance_to_road != null ? props.distance_to_road : props.distance_to_road_m,
+            ),
+            protected_area_status: solarStatusText(props.protected_area_status || props.in_protected_area),
+            recommended_capacity: finiteNumber(props.recommended_capacity),
+            module_technology: String(props.module_technology || props.module_type || ""),
+            tilt: finiteNumber(props.tilt),
+            azimuth: finiteNumber(props.azimuth),
+            expected_annual_energy: finiteNumber(
+              props.expected_annual_energy != null
+                ? props.expected_annual_energy
+                : props.annual_energy,
+            ),
+            specific_yield: finiteNumber(props.specific_yield),
+            engine: String(props.engine || "SolarDSS"),
+            viz_norm: vizNorm,
+            value: raw,
+          },
+        };
+      }),
+  };
+}
+
+function aliasSolarLayer(value) {
+  if (value == null || value === "") return null;
+  const key = String(value).trim().toLowerCase();
+  if (SOLAR_LAYER_ALIASES[key]) return SOLAR_LAYER_ALIASES[key];
+  return SOLAR_LAYER_IDS.includes(key) ? key : null;
+}
+
+function isSolarTagged(props) {
+  if (!props || typeof props !== "object") return false;
+  if (String(props.engine || "").toLowerCase() === "solardss") return true;
+  if (aliasSolarLayer(props.solar_layer) || aliasSolarLayer(props.solar_map_layer)) return true;
+  if (aliasSolarLayer(props.layer_type) || aliasSolarLayer(props.layer_name)) return true;
+  const layerType = String(props.layer_type || "").toLowerCase();
+  if (["site_point", "candidate_polygon", "ranked_sites", "analysis_extent"].includes(layerType)) {
+    return true;
+  }
+  const capability = String(props.capability_id || props.analysis || "");
+  return capability.startsWith("solar_");
+}
+
+function isSelectedSolarSite(props) {
+  if (props.selected === true || props.selected === "true") return true;
+  if (props.selected_site === true || props.selected_site === "true") return true;
+  return aliasSolarLayer(props.layer_type) === "selected_site" || aliasSolarLayer(props.solar_layer) === "selected_site";
+}
+
+function featureHasGeometry(feature) {
+  const geometry = feature && feature.geometry;
+  if (!geometry || typeof geometry !== "object") return false;
+  const type = String(geometry.type || "").replace(/^Multi/, "");
+  if (!["Point", "LineString", "Polygon"].includes(type)) return false;
+  return Array.isArray(geometry.coordinates) && geometry.coordinates.length > 0;
+}
+
+function solarStatusText(value) {
+  if (value == null || value === "") return "";
+  if (value === true) return "true";
+  if (value === false) return "false";
+  return String(value);
+}
+
+function solarPaintLayerIds() {
+  const ids = [];
+  for (const layerId of SOLAR_LAYER_IDS) {
+    ids.push(solarFillLayerId(layerId), solarLineLayerId(layerId), solarCircleLayerId(layerId));
+  }
+  return ids;
+}
+
+function ensureSolarLayers() {
+  if (!map) return;
+  for (const layerId of SOLAR_LAYER_IDS) {
+    const sourceId = solarSourceId(layerId);
+    if (!map.getSource(sourceId)) {
+      map.addSource(sourceId, {
+        type: "geojson",
+        data: emptyFeatureCollection(),
+        promoteId: "candidate_id",
+      });
+    }
+    const color = SOLAR_LAYER_COLORS[layerId];
+    const fillOpacity =
+      layerId === "search_area" ? 0.12 : layerId === "excluded_areas" ? 0.28 : 0.38;
+    addLayerSafe({
+      id: solarFillLayerId(layerId),
+      type: "fill",
+      source: sourceId,
+      filter: ["==", "$type", "Polygon"],
+      paint: {
+        "fill-color": solarFillColor(layerId, color),
+        "fill-opacity": fillOpacity,
+      },
+    });
+    addLayerSafe({
+      id: solarLineLayerId(layerId),
+      type: "line",
+      source: sourceId,
+      filter: ["==", "$type", "LineString"],
+      paint: {
+        "line-color": color,
+        "line-width": layerId === "power_lines" ? 2.8 : 2.2,
+        "line-opacity": 1,
+      },
+    });
+    addLayerSafe({
+      id: solarCircleLayerId(layerId),
+      type: "circle",
+      source: sourceId,
+      filter: ["==", "$type", "Point"],
+      paint: {
+        "circle-radius": layerId === "selected_site" ? 9 : layerId === "top_ranked_sites" ? 7 : 6,
+        "circle-color": color,
+        "circle-opacity": 0.92,
+        "circle-stroke-width": 1.4,
+        "circle-stroke-color": "#0b1220",
+      },
+    });
+    const visible = solarLayerVisibility.get(layerId);
+    setSolarLayerVisibility(layerId, visible !== false);
+  }
+}
+
+function solarFillColor(layerId, fallback) {
+  if (layerId !== "solar_resource") return fallback;
+  return [
+    "interpolate",
+    ["linear"],
+    ["to-number", ["coalesce", ["get", "viz_norm"], 0.5]],
+    0,
+    "#fef3c7",
+    1,
+    "#d97706",
+  ];
+}
+
+function applySolarLayerData(layers) {
+  const painted = [];
+  for (const layerId of SOLAR_LAYER_IDS) {
+    const source = map ? map.getSource(solarSourceId(layerId)) : null;
+    const collection = {
+      type: "FeatureCollection",
+      features: (layers && layers[layerId]) || [],
+    };
+    const mapped = mapLibreSolarCollection(collection, layerId);
+    if (source) source.setData(mapped);
+    painted.push(...mapped.features);
+  }
+  return painted;
+}
+
+function applySolarSelectionPaint() {
+  if (!map) return;
+  const selected = selectedSolarCandidateId || "__none__";
+  for (const layerId of SOLAR_LAYER_IDS) {
+    const circleId = solarCircleLayerId(layerId);
+    const lineId = solarLineLayerId(layerId);
+    const fillId = solarFillLayerId(layerId);
+    if (map.getLayer(circleId)) {
+      map.setPaintProperty(circleId, "circle-stroke-width", [
+        "case",
+        ["==", ["get", "candidate_id"], selected],
+        3.4,
+        1.4,
+      ]);
+      map.setPaintProperty(circleId, "circle-stroke-color", [
+        "case",
+        ["==", ["get", "candidate_id"], selected],
+        "#fbbf24",
+        "#0b1220",
+      ]);
+    }
+    if (map.getLayer(lineId)) {
+      map.setPaintProperty(lineId, "line-width", [
+        "case",
+        ["==", ["get", "candidate_id"], selected],
+        4,
+        layerId === "power_lines" ? 2.8 : 2.2,
+      ]);
+    }
+    if (map.getLayer(fillId)) {
+      map.setPaintProperty(fillId, "fill-opacity", [
+        "case",
+        ["==", ["get", "candidate_id"], selected],
+        0.62,
+        layerId === "search_area" ? 0.12 : layerId === "excluded_areas" ? 0.28 : 0.38,
+      ]);
+    }
+  }
+}
+
+function setSolarLayerVisibility(layerId, visible) {
+  solarLayerVisibility.set(layerId, visible);
+  if (!map) return;
+  const value = visible ? "visible" : "none";
+  for (const paintId of [
+    solarFillLayerId(layerId),
+    solarLineLayerId(layerId),
+    solarCircleLayerId(layerId),
+  ]) {
+    if (map.getLayer(paintId)) {
+      map.setLayoutProperty(paintId, "visibility", value);
+    }
+  }
+}
+
+function setOverlayVisibility(overlayId, visible) {
+  overlayVisibility.set(overlayId, visible);
+  applyOverlayVisibility();
+}
+
+function applyOverlayVisibility() {
+  if (!map) return;
+  const osmVisible = overlayVisibility.get("osm_results") !== false;
+  const energyVisible = overlayVisibility.get("energy_overlay") !== false;
+  const lisaVisible = overlayVisibility.get("lisa_clusters") !== false;
+  for (const paintId of [LAYER_FILL, LAYER_OUTLINE, LAYER_LINE, LAYER_POINT]) {
+    if (map.getLayer(paintId)) {
+      map.setLayoutProperty(paintId, "visibility", osmVisible ? "visible" : "none");
+    }
+  }
+  if (map.getLayer(LAYER_ENERGY)) {
+    map.setLayoutProperty(LAYER_ENERGY, "visibility", energyVisible ? "visible" : "none");
+  }
+  if (map.getLayer(LAYER_LISA)) {
+    map.setLayoutProperty(LAYER_LISA, "visibility", lisaVisible ? "visible" : "none");
+  }
+}
+
+function updateSolarLegend(layers) {
+  const list = document.getElementById("map-solar-legend");
+  if (!list) return;
+  const present = SOLAR_LAYER_IDS.filter(
+    (layerId) => layers && Array.isArray(layers[layerId]) && layers[layerId].length > 0,
+  );
+  list.hidden = present.length === 0;
+  list.replaceChildren();
+  if (!present.length) return;
+  const title = document.createElement("li");
+  title.className = "solar-legend-title";
+  title.textContent = "Analysis layers:";
+  list.appendChild(title);
+  for (const layerId of present) {
+    const item = document.createElement("li");
+    const label = document.createElement("label");
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = solarLayerVisibility.get(layerId) !== false;
+    checkbox.addEventListener("change", () => {
+      setSolarLayerVisibility(layerId, checkbox.checked);
+    });
+    const swatch = document.createElement("span");
+    swatch.className = "legend-swatch";
+    swatch.style.background = SOLAR_LAYER_COLORS[layerId];
+    const text = document.createElement("span");
+    text.textContent = analysisLayerTitles.get(layerId) || SOLAR_LAYER_LABELS[layerId];
+    label.appendChild(checkbox);
+    label.appendChild(swatch);
+    label.appendChild(text);
+    item.appendChild(label);
+    list.appendChild(item);
+  }
+}
+
 function lisaColorExpression() {
   return [
     "match",
@@ -556,6 +1107,22 @@ function updateLisaLegend(collection) {
   if (!list) return;
   const features = collection && Array.isArray(collection.features) ? collection.features : [];
   list.hidden = features.length === 0;
+  const existing = list.querySelector("label.analysis-layer-toggle");
+  if (existing) existing.remove();
+  if (!features.length) return;
+  const item = document.createElement("li");
+  const label = document.createElement("label");
+  label.className = "analysis-layer-toggle";
+  const checkbox = document.createElement("input");
+  checkbox.type = "checkbox";
+  checkbox.checked = overlayVisibility.get("lisa_clusters") !== false;
+  checkbox.addEventListener("change", () => setOverlayVisibility("lisa_clusters", checkbox.checked));
+  const text = document.createElement("span");
+  text.textContent = analysisLayerTitles.get("lisa_clusters") || "Show LISA overlay";
+  label.appendChild(checkbox);
+  label.appendChild(text);
+  item.appendChild(label);
+  list.appendChild(item);
 }
 
 export function mapLibreEnergyCollection(collection) {
@@ -669,6 +1236,7 @@ function updateEnergyLegend(collection) {
     heading.id = "map-energy-legend-title";
     heading.textContent = energyLayerName(collection);
     list.appendChild(heading);
+    list.appendChild(overlayToggleItem("energy_overlay", "Show analysis overlay"));
     for (const [id, color] of [...clusters.entries()].sort((a, b) => a[0].localeCompare(b[0], undefined, { numeric: true }))) {
       const li = document.createElement("li");
       const swatch = document.createElement("span");
@@ -684,6 +1252,25 @@ function updateEnergyLegend(collection) {
   }
   list.hidden = features.length === 0;
   if (title && features.length) setLegendTitle(title, energyLayerName(collection));
+  if (features.length && !list.querySelector("label.analysis-layer-toggle")) {
+    list.appendChild(overlayToggleItem("energy_overlay", "Show analysis overlay"));
+  }
+}
+
+function overlayToggleItem(overlayId, labelText) {
+  const item = document.createElement("li");
+  const label = document.createElement("label");
+  label.className = "analysis-layer-toggle";
+  const checkbox = document.createElement("input");
+  checkbox.type = "checkbox";
+  checkbox.checked = overlayVisibility.get(overlayId) !== false;
+  checkbox.addEventListener("change", () => setOverlayVisibility(overlayId, checkbox.checked));
+  const text = document.createElement("span");
+  text.textContent = analysisLayerTitles.get(overlayId) || labelText;
+  label.appendChild(checkbox);
+  label.appendChild(text);
+  item.appendChild(label);
+  return item;
 }
 
 function setLegendTitle(node, text) {
@@ -1058,6 +1645,29 @@ function popupHtml(feature) {
   // MapLibre requires HTML strings for popups; every interpolated value is escaped.
   const props = feature.properties || {};
   const tags = readTags(props);
+  if (props.solar_layer || props.candidate_id || String(props.engine || "") === "SolarDSS") {
+    return popupFromRows([
+      ["Layer", SOLAR_LAYER_LABELS[props.solar_layer] || props.layer_name],
+      ["Site", props.name || props.candidate_id],
+      ["Candidate", props.candidate_id],
+      ["Rank", props.rank],
+      ["Score", formatPopupNumber(props.score)],
+      ["GHI", formatPopupNumber(props.ghi)],
+      ["DNI", formatPopupNumber(props.dni)],
+      ["Slope", formatPopupNumber(props.slope)],
+      ["Available area", formatPopupNumber(props.available_area)],
+      ["Distance to grid", formatPopupNumber(props.distance_to_grid)],
+      ["Distance to road", formatPopupNumber(props.distance_to_road)],
+      ["Protected area", props.protected_area_status],
+      ["Recommended capacity", formatPopupNumber(props.recommended_capacity)],
+      ["Module technology", props.module_technology],
+      ["Tilt", formatPopupNumber(props.tilt)],
+      ["Azimuth", formatPopupNumber(props.azimuth)],
+      ["Annual energy", formatPopupNumber(props.expected_annual_energy)],
+      ["Specific yield", formatPopupNumber(props.specific_yield)],
+      ["Engine", props.engine || "SolarDSS"],
+    ]);
+  }
   if (props.cluster_id) {
     return popupFromRows([
       ["Bus ID", props.bus_id || props.name],

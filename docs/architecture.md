@@ -15,7 +15,7 @@ flowchart LR
   API --> Agent["PlannerExecutorAgent"]
   Agent --> LLM["LLMProvider (Ollama or AvalAI)"]
   Agent --> Reg["ToolRegistry"]
-  Reg --> RAG["search_osm_knowledge"]
+  Reg --> RAG["search_osm_knowledge / search_solar_knowledge"]
   Reg --> RP["resolve_place"]
   Reg --> OSM["query_osm"]
   Reg --> AN["analyze_features"]
@@ -59,6 +59,11 @@ search_osm_knowledge and/or resolve_place and/or query_osm
 and/or analyze_features (state-aware model-facing eligibility)
 and/or simbench_query (SimBench datasets only)
 and/or analyze_energy_grid (GeoLoadST analysis; no science in Ariadne)
+and/or analyze_solar_site (SolarDSS plugin execution via ariadne_solar; the
+LLM only fills decision slots. The first clarification is the user goal —
+existing building, site selection, or candidate ranking — then only that
+goal's parameters. Indicators, GeoJSON, and charts are copied from SolarDSS)
+and/or search_solar_knowledge (solar-PV documents; never SolarDSS numbers)
  ↓
 deterministic indicator execution (catalog method, never model arithmetic)
  ↓
@@ -93,7 +98,7 @@ Nothing at import time opens pools, loads models, or dials the network.
 | Retrieval | `KnowledgeRetriever` | session-bound pgvector retriever |
 | Overpass | `OverpassClient` | `HttpOverpassClient` |
 | Places | `PlaceResolver` | `NominatimPlaceResolver` |
-| Tools | `Tool` + registry | `search_osm_knowledge`, `resolve_place`, `query_osm`, `analyze_features`, `simbench_query`, `analyze_energy_grid` |
+| Tools | `Tool` + registry | `search_osm_knowledge`, `search_solar_knowledge`, `resolve_place`, `query_osm`, `analyze_features`, `simbench_query`, `analyze_energy_grid`, `analyze_solar_site` |
 
 ### Prompted vs native tools
 
@@ -165,11 +170,13 @@ budget remains.
 
 ## Documentation vs live data
 
-| | `search_osm_knowledge` | `query_osm` | `simbench_query` |
-|---|---|---|---|
-| Source | Local OSM Wiki corpus | Overpass API | SimBench dataset |
-| Output | Passages + scores | Features + GeoJSON + generated QL | Network metadata + GeoJSON |
-| May fill `geojson` | No | Yes | Yes (WGS84 buses/lines only) |
+| | `search_osm_knowledge` | `search_solar_knowledge` | `query_osm` | `analyze_solar_site` |
+|---|---|---|---|---|
+| Source | Local OSM Wiki corpus | Packaged solar-PV notes | Overpass API | SolarDSS routing + copied engine outputs |
+| Output | Passages + scores | Passages + scores | Features + GeoJSON | Decision slots; optional copied GeoJSON/charts/indicators |
+| Evidence class | Knowledge / document | Knowledge / document | Map data | Deterministic analytical |
+| May fill `geojson` | No | No | Yes | Copied SolarDSS geometry only |
+| May replace SolarDSS indicators | No | No | No | Engine only (never RAG, never Ariadne arithmetic) |
 
 ## Safe Overpass path
 
@@ -232,9 +239,12 @@ features.
 - Canonical endpoint: `POST /api/v1/agent/query`
 - Request: `{ "message": "…" }` (an optional conversation identifier may be
   supplied so follow-up questions stay in the same session)
-- Response: answer, `knowledge_sources`, `execution_trace`, `overpass_query`,
-  `geojson`, warnings/errors, `stop_reason`, attribution, `request_id`,
-  optional structured provenance
+- Response: answer, `knowledge_sources`, `evidence` (deterministic analytical
+  vs knowledge/document), `execution_trace`, `overpass_query`,
+  `geojson`, `analysis_result` (unified plugin envelope), `agent_questions`,
+  warnings/errors, `stop_reason`, attribution, `request_id`,
+  optional structured provenance. `energy_analysis` and `solar_results` remain
+  for existing UI cards.
 - Errors: 422 validation, 429 rate limit, 503 dependency, 504 timeout, 500 sanitized
 - Correlation: `X-Request-ID` middleware
 
@@ -242,11 +252,15 @@ features.
 
 English GeoAI console at `GET /` (same origin). Layout: left analysis panel +
 right MapLibre map (`ariadne-results` source, optional `ariadne-analysis-area`).
-The backend FeatureCollection is the map/download source of truth. Browser-local
-GeoJSON download uses `application/geo+json`. Analysis Workflow renders
-`execution_trace` operational events only, plus one clearly marked client-side
-“Rendered GeoJSON on the map” event. Documentation sources, live summary,
-warnings/errors, GeoJSON preview, and read-only Overpass provenance are separate.
+The backend FeatureCollection is the map/download source of truth. Plugin
+`analysis_result.layers` drive generic analysis-layer visibility. Clarification
+prompts render in the Agent Questions panel and reuse `conversation_id`.
+Charts (bar/line/scatter/radar) render below the answer when an engine supplied
+series. Browser-local GeoJSON download uses `application/geo+json`. Analysis
+Workflow renders `execution_trace` operational events only, plus one clearly
+marked client-side “Rendered GeoJSON on the map” event. Documentation sources,
+live summary, warnings/errors, GeoJSON preview, and read-only Overpass
+provenance are separate.
 
 ## Timeout boundaries
 
@@ -264,7 +278,8 @@ Dedicated DB `osm_geoagent`:
 
 - `knowledge_documents` unique on `(domain, source_url)`
 - `knowledge_chunks` unique on `(document_id, chunk_index)`, `VECTOR(1024)`
-- `active_learning_candidates` one row per retained run (no GeoJSON, no prompts)
+- `active_learning_candidates` one row per retained run (no GeoJSON, no prompts;
+  SolarDSS indicator numbers only as provenance copies, never as training targets)
 - `active_learning_reviews` append-only audit of human review decisions
 - `training_dataset_exports` dataset lineage (version, candidate ids, digest)
 - Live GeoJSON is request-scoped (not persisted)
@@ -332,7 +347,15 @@ switched off entirely with `ACTIVE_LEARNING_ENABLED=false`.
 Governing rule:
 
 > The runtime selects and exports. Training happens elsewhere, from a versioned
-> file, after a human approved it.
+> file, after a human approved it. Active learning never recomputes PV physics
+> and never replaces PVGIS, pvlib, terrain, GIS distances or MCDA formulas.
+
+SolarDSS runs are retained as `solar_decision` candidates. The stored
+`solar_workflow` snapshot holds the original structured decision, indicator
+provenance copies, ranking profile, model planning decision, expert feedback,
+corrected preference/label and provenance. Export teaches intent routing, tool
+and capability selection, follow-up questions and preference labels — not
+yield, slope, GHI or ranking scores.
 
 | Artifact | Meaning |
 |---|---|

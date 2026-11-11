@@ -206,6 +206,16 @@ const line = {
 };
 if (!isRenderableChart(bar)) throw new Error("bar rejected");
 if (!isRenderableChart(line)) throw new Error("line rejected");
+const radar = {
+  chart_id: "criteria",
+  title: "Radar",
+  chart_type: "radar",
+  series: [{
+    name: "score",
+    data: [{ x: "GHI", y: 0.8 }, { x: "slope", y: 0.4 }, { x: "grid", y: 0.6 }],
+  }],
+};
+if (!isRenderableChart(radar)) throw new Error("radar rejected");
 const bad = { chart_type: "pie", title: "p", series: [] };
 if (isRenderableChart(bad)) throw new Error("malformed accepted");
 const card = renderAnalysisChart(bar);
@@ -230,7 +240,8 @@ async def test_primary_english_labels_exist(client: httpx.AsyncClient):
         "Clear",
         "Answer",
         "Analysis Workflow",
-        "OSM Documentation Sources",
+        "Knowledge / Document Evidence",
+        "Deterministic Analytical Evidence",
         "Warnings",
         "Errors",
         "Generated Overpass Query",
@@ -314,7 +325,7 @@ async def test_static_assets_are_served(client: httpx.AsyncClient):
     assert "@media (min-width: 640px)" in css.text
     assert "@media (max-width: 639px)" in css.text
 
-    for name in ("main.js", "api.js", "dom.js", "map.js", "download.js"):
+    for name in ("main.js", "api.js", "dom.js", "map.js", "download.js", "solar-panel.js"):
         response = await client.get(f"/static/js/{name}")
         assert response.status_code == 200, name
         assert response.text.strip()
@@ -410,15 +421,37 @@ async def test_comparison_map_keeps_all_target_features():
     assert "title.title = titleText" in main_js
     assert "source-url" in main_js
     energy_at = html.find('id="energy-analysis-heading"')
+    solar_at = html.find('id="solar-results-heading"')
     charts_at = html.find('id="analysis-charts-heading"')
     answer_at = html.find('id="answer-heading"')
+    questions_at = html.find('id="agent-questions-heading"')
     workflow_at = html.find('id="workflow-heading"')
+    analytical_at = html.find('id="analytical-evidence-heading"')
     sources_at = html.find('id="sources-heading"')
-    assert 0 < energy_at < charts_at < answer_at < workflow_at < sources_at
+    assert (
+        0
+        < energy_at
+        < solar_at
+        < answer_at
+        < questions_at
+        < charts_at
+        < workflow_at
+        < analytical_at
+        < sources_at
+    )
+    assert "Agent Questions" in html
+    assert 'id="agent-questions-section"' in html
+    assert "onClarificationSubmit" in main_js
+    assert "Deterministic Analytical Evidence" in html
+    assert "Knowledge / Document Evidence" in html
     assert "Energy Analysis Results" in html
+    assert "Solar Decision Support Results" in html
     assert "Analysis Charts" in html
     assert "renderEnergyAnalysis" in main_js
+    assert "renderSolarDecisionSupport" in main_js
     assert "renderAnalysisCharts" in main_js
+    assert "renderEvidence" in main_js
+    assert "renderAnalyticalEvidence" in main_js
     section_at = html.find('id="analysis-charts-section"')
     assert "hidden" in html[max(0, section_at - 80) : section_at]
     assert "workflow-sources-grid" not in html
@@ -444,6 +477,9 @@ import {
   mapLibreEnergyCollection,
   splitLisaCollection,
   splitEnergyLayers,
+  splitSolarLayers,
+  mapLibreSolarCollection,
+  SOLAR_LAYER_IDS,
   targetsFromCollection,
   TARGET_PALETTE,
   LISA_CLUSTER_COLORS,
@@ -574,6 +610,66 @@ if (energyPainted.features[0].properties.layer_name !== "GeoLoadST Topology Cent
 if (energyPainted.features[0].properties.viz_norm !== 0.5) {
   throw new Error("single-value overlay must keep a mid visualization scale");
 }
+
+const solarMixed = {
+  type: "FeatureCollection",
+  features: [
+    {
+      type: "Feature",
+      geometry: {
+        type: "Polygon",
+        coordinates: [[[10, 53], [11, 53], [11, 54], [10, 54], [10, 53]]],
+      },
+      properties: { solar_layer: "search_area", layer_name: "Search Area" },
+    },
+    {
+      type: "Feature",
+      geometry: {
+        type: "Polygon",
+        coordinates: [
+          [[10.2, 53.2], [10.3, 53.2], [10.3, 53.3], [10.2, 53.3], [10.2, 53.2]],
+        ],
+      },
+      properties: {
+        candidate_id: "A",
+        layer_name: "SolarDSS candidates",
+        capability_id: "solar_candidate_ranking",
+        rank: 1,
+        score: 0.81,
+        ghi: 1820,
+        selected: true,
+      },
+    },
+    {
+      type: "Feature",
+      geometry: { type: "LineString", coordinates: [[10, 53], [11, 54]] },
+      properties: { name: "road", highway: "residential", target_id: "t1" },
+    },
+    {
+      type: "Feature",
+      properties: { solar_layer: "candidate_sites", candidate_id: "ghost" },
+    },
+  ],
+};
+const solarSplit = splitSolarLayers(solarMixed);
+if (solarSplit.remainder.features.length !== 1) throw new Error("osm remainder lost");
+if (solarSplit.layers.search_area.length !== 1) throw new Error("search area lost");
+if (solarSplit.layers.candidate_sites.length !== 1) throw new Error("candidate lost");
+if (solarSplit.layers.selected_site.length !== 1) throw new Error("selected site lost");
+if (solarSplit.layers.top_ranked_sites.length !== 1) throw new Error("top ranked lost");
+if (solarSplit.layers.roads.length !== 0) throw new Error("osm road classified as solar");
+for (const layerId of SOLAR_LAYER_IDS) {
+  if (!Array.isArray(solarSplit.layers[layerId])) throw new Error("missing layer " + layerId);
+}
+const solarPainted = mapLibreSolarCollection(
+  { type: "FeatureCollection", features: solarSplit.layers.candidate_sites },
+  "candidate_sites",
+);
+if (solarPainted.features.length !== 1) throw new Error("ghost geometry invented");
+if (solarPainted.features[0].properties.ghi !== 1820) throw new Error("ghi stripped");
+if (solarPainted.features[0].geometry.coordinates[0][0][0] !== 10.2) {
+  throw new Error("geometry rewritten");
+}
 """,
                 encoding="utf-8",
             )
@@ -617,7 +713,7 @@ async def test_no_persian_string_reversal_or_map_rtl_css_hacks():
     map_js = _read("static", "js", "map.js")
     css = _CSS.read_text(encoding="utf-8")
     html = _INDEX.read_text(encoding="utf-8")
-    for name in ("main.js", "api.js", "dom.js", "map.js", "download.js"):
+    for name in ("main.js", "api.js", "dom.js", "map.js", "download.js", "solar-panel.js"):
         text = _read("static", "js", name)
         assert 'split("").reverse()' not in text
         assert "split('').reverse()" not in text
@@ -787,7 +883,7 @@ async def test_javascript_syntax_parses():
     import tempfile
     from pathlib import Path as _Path
 
-    for name in ("main.js", "api.js", "dom.js", "map.js", "download.js"):
+    for name in ("main.js", "api.js", "dom.js", "map.js", "download.js", "solar-panel.js"):
         path = _JS_DIR / name
         text = path.read_text(encoding="utf-8")
         assert "import " in text or "export " in text
@@ -811,7 +907,7 @@ async def test_javascript_syntax_parses():
 async def test_index_and_assets_exist_on_disk():
     assert _INDEX.is_file()
     assert _CSS.is_file()
-    for name in ("main.js", "api.js", "dom.js", "map.js", "download.js"):
+    for name in ("main.js", "api.js", "dom.js", "map.js", "download.js", "solar-panel.js"):
         assert (_JS_DIR / name).is_file()
     vendor = _WEB_ROOT / "static" / "vendor"
     assert (vendor / "mapbox-gl-rtl-text-0.2.3.js").is_file()

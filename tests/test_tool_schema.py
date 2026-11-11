@@ -13,7 +13,9 @@ from app.llm.tool_schema import normalize_tool_parameters_schema, schema_structu
 from app.osm.query_spec import OsmFeatureQuery
 from app.tools.energy_tools import AnalyzeEnergyGridArgs
 from app.tools.search_osm_knowledge import SearchOsmKnowledgeArgs
+from app.tools.search_solar_knowledge import SearchSolarKnowledgeArgs
 from app.tools.simbench_tools import SimBenchQueryArgs
+from app.tools.solar_tools import AnalyzeSolarSiteArgs
 from pydantic import ValidationError
 
 
@@ -23,6 +25,11 @@ def _all_tool_defs() -> list[ToolDefinition]:
             "search_osm_knowledge",
             "search",
             SearchOsmKnowledgeArgs.model_json_schema(),
+        ),
+        ToolDefinition(
+            "search_solar_knowledge",
+            "solar knowledge",
+            SearchSolarKnowledgeArgs.model_json_schema(),
         ),
         ToolDefinition(
             "query_osm",
@@ -43,6 +50,11 @@ def _all_tool_defs() -> list[ToolDefinition]:
             "analyze_energy_grid",
             "energy",
             AnalyzeEnergyGridArgs.model_json_schema(),
+        ),
+        ToolDefinition(
+            "analyze_solar_site",
+            "solar",
+            AnalyzeSolarSiteArgs.model_json_schema(),
         ),
     ]
 
@@ -70,7 +82,7 @@ def test_each_registered_tool_schema_normalises():
 
 def test_complete_registry_serialises_for_native_tools():
     encoded = [OllamaProvider._encode_tool(tool) for tool in _all_tool_defs()]
-    assert len(encoded) == 5
+    assert len(encoded) == 7
     for item in encoded:
         assert item["type"] == "function"
         assert set(item["function"]) == {"name", "description", "parameters"}
@@ -86,14 +98,17 @@ def test_prompted_catalogue_is_compact_and_fits_budget():
     assert "Available tools:\n" in instructions
     catalogue = instructions.split("Available tools:\n", 1)[1]
     assert "\n  " not in catalogue
-    assert len(instructions) < 8_000
+    assert len(instructions) < 9_000
     assert "$defs" not in instructions
     assert "analyze_features" in instructions
     assert "query_osm" in instructions
     assert "search_osm_knowledge" in instructions
+    assert "search_solar_knowledge" in instructions
     assert "simbench_query" in instructions
     assert "analyze_energy_grid" in instructions
+    assert "analyze_solar_site" in instructions
     assert "topology_centrality" in instructions
+    assert "solar_site_selection" in instructions
     assert '"limit":20' in instructions
 
 

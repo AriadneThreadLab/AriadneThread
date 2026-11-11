@@ -19,7 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from app import __version__
 from app.api.agent import router as agent_router
 from app.api.errors import register_exception_handlers
-from app.api.health import geoloadst_health
+from app.api.health import geoloadst_health, solardss_health
 from app.api.health import router as health_router
 from app.api.middleware import request_context_middleware
 from app.bootstrap import ApplicationServices, build_application_services
@@ -59,6 +59,7 @@ def create_app(
         # Selection only. No training pipeline is imported or started here.
         app.state.active_learning = owned.active_learning
         energy = geoloadst_health()
+        solar = solardss_health()
         logger.info(
             "OSM GeoAgent starting (env=%s, provider=%s, model=%s, llm_host=%s, tools=%s)",
             owned.settings.app_env,
@@ -72,6 +73,13 @@ def create_app(
             energy.geoloadst_available,
             energy.version or "none",
             ",".join(energy.capabilities) or "none",
+        )
+        logger.info(
+            "solardss_health plugin=%s solardss=%s version=%s capabilities=%s",
+            solar.ariadne_solar_available,
+            solar.solardss_available,
+            solar.version or "none",
+            ",".join(solar.capabilities) or "none",
         )
         try:
             yield

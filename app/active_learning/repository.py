@@ -79,6 +79,7 @@ def _from_row(row: ActiveLearningCandidateRow) -> ActiveLearningCandidate:
             "place_resolution_events": row.place_resolution_events,
             "rag_evidence_summary": row.rag_evidence_summary,
             "metric_selection": row.metric_selection,
+            "solar_workflow": row.solar_workflow,
             "error_codes": row.error_codes,
             "warnings": row.warnings,
             "external_error_codes": row.external_error_codes,

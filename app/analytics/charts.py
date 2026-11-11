@@ -11,8 +11,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-ChartType = Literal["bar", "line", "scatter"]
-SUPPORTED_CHART_TYPES: frozenset[str] = frozenset({"bar", "line", "scatter"})
+ChartType = Literal["bar", "line", "scatter", "radar"]
+SUPPORTED_CHART_TYPES: frozenset[str] = frozenset({"bar", "line", "scatter", "radar"})
 
 
 class ChartPoint(BaseModel):
@@ -121,6 +121,54 @@ def bar_chart(
         chart_id=chart_id,
         title=title,
         chart_type="bar",
+        x_label=x_label,
+        y_label=y_label,
+        series=[series],
+        metadata=metadata or ChartMetadata(),
+    )
+
+
+def scatter_chart(
+    *,
+    chart_id: str,
+    title: str,
+    points: list[tuple[str | int | float, float]],
+    x_label: str,
+    y_label: str,
+    series_name: str,
+    metadata: ChartMetadata | None = None,
+) -> AnalysisChart | None:
+    series = _series(series_name, points)
+    if series is None:
+        return None
+    return AnalysisChart(
+        chart_id=chart_id,
+        title=title,
+        chart_type="scatter",
+        x_label=x_label,
+        y_label=y_label,
+        series=[series],
+        metadata=metadata or ChartMetadata(),
+    )
+
+
+def radar_chart(
+    *,
+    chart_id: str,
+    title: str,
+    points: list[tuple[str | int | float, float]],
+    x_label: str,
+    y_label: str,
+    series_name: str,
+    metadata: ChartMetadata | None = None,
+) -> AnalysisChart | None:
+    series = _series(series_name, points)
+    if series is None:
+        return None
+    return AnalysisChart(
+        chart_id=chart_id,
+        title=title,
+        chart_type="radar",
         x_label=x_label,
         y_label=y_label,
         series=[series],

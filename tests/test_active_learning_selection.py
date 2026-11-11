@@ -227,6 +227,8 @@ async def test_model_attributed_place_failure_still_scores():
             "no semantically matching result (rejected=name_mismatch)",
             ErrorAttribution.MODEL,
         ),
+        ("solar_unknown_capability", "unknown capability_id", ErrorAttribution.MODEL),
+        ("unknown_solar_capability", "not in the registry", ErrorAttribution.MODEL),
     ],
 )
 def test_error_attribution_separates_model_from_infrastructure(code, message, expected):

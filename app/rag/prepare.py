@@ -15,7 +15,7 @@ from app.rag.wikitext import extract_sections, join_sections_for_hash
 
 @dataclass(frozen=True, slots=True)
 class PreparedDocument:
-    """Fully prepared OSM documentation document ready for persistence."""
+    """Fully prepared knowledge document ready for persistence."""
 
     domain: str
     title: str

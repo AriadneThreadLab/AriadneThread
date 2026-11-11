@@ -12,6 +12,7 @@ from typing import Any
 
 from app.llm.contracts import ToolDefinition
 from app.llm.tool_schema import normalize_tool_parameters_schema
+from app.solar.capabilities import capability_json_schema as solar_capability_json_schema
 from app.tools.energy_capabilities import capability_json_schema
 
 # Hand-authored compact shapes for registered tools. Keys must match
@@ -35,6 +36,25 @@ _COMPACT_SPECS: dict[str, dict[str, Any]] = {
             },
         },
         "example": {"query": "public park OpenStreetMap tag", "top_k": 5},
+    },
+    "search_solar_knowledge": {
+        "purpose": (
+            "Search local solar-PV methodology, standards, and regulatory notes. "
+            "Returns documentation only — never SolarDSS indicator values."
+        ),
+        "when_to_use": (
+            "GHI meaning, why slope matters, exclusion-policy language, "
+            "permitting or grid rules. Never replace SolarDSS numbers with RAG."
+        ),
+        "arguments": {
+            "type": "object",
+            "required": ["query"],
+            "properties": {
+                "query": {"type": "string", "minLength": 2, "maxLength": 500},
+                "top_k": {"type": "integer", "minimum": 1, "maximum": 20},
+            },
+        },
+        "example": {"query": "What does GHI mean?", "top_k": 5},
     },
     "resolve_place": {
         "purpose": (
@@ -275,7 +295,102 @@ _COMPACT_SPECS: dict[str, dict[str, Any]] = {
             "capability_id": "topology_centrality",
         },
     },
+    "analyze_solar_site": {
+        "purpose": (
+            "Route solar PV decisions and copy SolarDSS results. "
+            "Does not compute GHI or other scientific indicators."
+        ),
+        "when_to_use": (
+            "Siting, rooftop ranking, or a known roof. Do not invent the goal. "
+            "Ask only returned questions. Never ask GHI, slope, or tilt."
+        ),
+        "arguments": {
+            "type": "object",
+            "properties": {
+                "capability_id": {"type": "string"},
+                "mode": {"type": "string", "enum": ["site_selection", "fixed_site"]},
+                "site_selection_scope": {
+                    "type": "string",
+                    "enum": ["region_search", "aoi_search", "candidate_ranking"],
+                },
+                "project_type": {
+                    "type": "string",
+                    "enum": [
+                        "utility_scale",
+                        "ground_mounted",
+                        "rooftop",
+                        "commercial_rooftop",
+                        "residential_rooftop",
+                    ],
+                },
+                "region_name": {"type": "string"},
+                "aoi_name": {"type": "string"},
+                "location_name": {"type": "string"},
+                "candidate_ids": {"type": "array", "items": {"type": "string"}},
+                "target_capacity_kw": {"type": "number"},
+                "budget_amount": {"type": "number"},
+                "battery_required": {"type": "boolean"},
+                "grid_connection_required": {"type": "boolean"},
+                "maximum_grid_distance_m": {"type": "number"},
+                "bbox": {
+                    "type": "array",
+                    "items": {"type": "number"},
+                    "minItems": 4,
+                    "maxItems": 4,
+                },
+                "generation_strategy": {
+                    "type": "string",
+                    "enum": ["regular_grid", "hexagonal_grid", "features"],
+                },
+                "cell_size": {"type": "number"},
+                "cell_size_unit": {"type": "string", "enum": ["m", "deg"]},
+                "ranking_profile": {
+                    "type": "string",
+                    "enum": [
+                        "energy_focused",
+                        "infrastructure_focused",
+                        "environment_focused",
+                        "balanced",
+                    ],
+                },
+                "constraint_profile": {
+                    "type": "string",
+                    "enum": [
+                        "utility_scale_default_example",
+                        "rooftop_default_example",
+                    ],
+                },
+                "tilt_deg": {"type": "number"},
+                "azimuth_deg": {"type": "number"},
+                "system_loss_percent": {"type": "number"},
+                "top_n": {"type": "integer"},
+                "candidate_geometries": {"type": "array"},
+            },
+        },
+        "example": {
+            "mode": "site_selection",
+            "site_selection_scope": "region_search",
+            "project_type": "utility_scale",
+            "region_name": "Vienna",
+            "capability_id": "solar_site_selection",
+        },
+    },
 }
+
+
+def _solar_arguments_from_registry(base: dict[str, Any]) -> dict[str, Any]:
+    """Attach the live SolarDSS capability enum. Does not invent ids."""
+    arguments = deepcopy(base)
+    properties = arguments.get("properties")
+    if isinstance(properties, dict):
+        schema = solar_capability_json_schema()
+        schema["description"] = (
+            "Registered SolarDSS capability_id. "
+            "Use solar_site_selection, solar_candidate_ranking, or "
+            "solar_fixed_site_analysis. Do not invent method names."
+        )
+        properties["capability_id"] = schema
+    return arguments
 
 
 def _energy_arguments_from_registry(base: dict[str, Any]) -> dict[str, Any]:
@@ -302,6 +417,8 @@ def render_compact_tool_catalogue(tools: list[ToolDefinition]) -> list[dict[str,
             arguments = compact["arguments"]
             if tool.name == "analyze_energy_grid":
                 arguments = _energy_arguments_from_registry(compact["arguments"])
+            elif tool.name == "analyze_solar_site":
+                arguments = _solar_arguments_from_registry(compact["arguments"])
             entries.append(
                 {
                     "name": tool.name,

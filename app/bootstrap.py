@@ -25,6 +25,7 @@ from app.llm.factory import build_llm_provider
 from app.osm.factory import build_query_osm_tool
 from app.places.factory import build_resolve_place_tool
 from app.rag.retriever import SessionBoundKnowledgeRetriever
+from app.solar.store import InMemorySolarDecisionStore
 from app.tools.analyze_features import AnalyzeFeaturesTool
 from app.tools.energy_tools import build_analyze_energy_grid_tool
 from app.tools.factory import build_tool_registry
@@ -32,6 +33,7 @@ from app.tools.query_osm import QueryOsmTool
 from app.tools.registry import ToolRegistry
 from app.tools.resolve_place import ResolvePlaceTool
 from app.tools.simbench_tools import build_simbench_query_tool
+from app.tools.solar_tools import build_analyze_solar_site_tool
 
 
 @dataclass(slots=True)
@@ -52,6 +54,8 @@ class ApplicationServices:
     active_learning: ActiveLearningService | None = None
     #: Structured analytical memory. Independent of Active Learning.
     execution_memory: ExecutionMemoryService | None = None
+    #: Structured solar decision slots, keyed by conversation_id.
+    solar_store: InMemorySolarDecisionStore | None = None
 
     async def aclose(self) -> None:
         await self.llm_provider.aclose()
@@ -71,6 +75,8 @@ def build_application_services(settings: Settings) -> ApplicationServices:
     analyze_features_tool = build_analyze_features_tool()
     simbench_query_tool = build_simbench_query_tool()
     analyze_energy_grid_tool = build_analyze_energy_grid_tool()
+    solar_store = InMemorySolarDecisionStore()
+    analyze_solar_site_tool = build_analyze_solar_site_tool(store=solar_store)
     llm_provider = build_llm_provider(settings)
     tool_registry = build_tool_registry(
         knowledge_retriever=retriever,
@@ -79,10 +85,17 @@ def build_application_services(settings: Settings) -> ApplicationServices:
         analyze_features_tool=analyze_features_tool,
         simbench_query_tool=simbench_query_tool,
         analyze_energy_grid_tool=analyze_energy_grid_tool,
+        analyze_solar_site_tool=analyze_solar_site_tool,
         rag_top_k=settings.rag_top_k,
     )
     execution_memory = build_execution_memory_service(settings, database, llm_provider)
-    geo_agent = build_geo_agent(llm_provider, tool_registry, settings, execution_memory)
+    geo_agent = build_geo_agent(
+        llm_provider,
+        tool_registry,
+        settings,
+        execution_memory,
+        solar_store=solar_store,
+    )
     return ApplicationServices(
         settings=settings,
         database=database,
@@ -95,4 +108,5 @@ def build_application_services(settings: Settings) -> ApplicationServices:
         geo_agent=geo_agent,
         active_learning=build_active_learning_service(settings, database),
         execution_memory=execution_memory,
+        solar_store=solar_store,
     )

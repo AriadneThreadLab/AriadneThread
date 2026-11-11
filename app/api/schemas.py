@@ -12,16 +12,23 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.active_learning.contracts import FeedbackSentiment
+from app.active_learning.solar import SolarExpertFeedback
 from app.agent.contracts import GeoAgentResponse, StopReason, TraceEvent
+from app.agent.evidence import EvidencePartition, partition_evidence
 from app.analytics.charts import AnalysisChart
 from app.analytics.contracts import AnalysisBlock
+from app.analytics.plugin_result import AgentQuestion, ScientificAnalysisResult
 from app.execution_memory.contracts import ExecutionMemoryTrace
 from app.llm.tool_protocol import FINAL_ANSWER_KEY, TOOL_CALL_KEY
 from app.osm.contracts import OSM_ATTRIBUTION, GeoJsonFeatureCollection
-from app.rag.contracts import RetrievedPassage
+from app.rag.contracts import SOLAR_PV_KNOWLEDGE_DOMAIN, RetrievedPassage
+from app.solar.contracts import SolarDecisionReport
+from app.solar.display import SolarDecisionSupportReport
 from app.tools.energy_report import EnergyAnalysisReport
 from app.tools.energy_tools import ENERGY_ANALYSIS_ATTRIBUTION
+from app.tools.search_solar_knowledge import SOLAR_KNOWLEDGE_ATTRIBUTION
 from app.tools.simbench_tools import SIMBENCH_ATTRIBUTION
+from app.tools.solar_tools import SOLAR_DECISION_ATTRIBUTION, SOLAR_MAP_ATTRIBUTION
 
 StopReasonOut = StopReason
 
@@ -93,6 +100,13 @@ class AgentFeedbackRequest(BaseModel):
         default=None,
         description="Optional corrected plan; validated against the authoritative schema.",
     )
+    solar_feedback: SolarExpertFeedback | None = Field(
+        default=None,
+        description=(
+            "Optional SolarDSS expert labels: ranking accept/reject, preference, "
+            "intent, capability, missing-data, or ranking usefulness. Never PV physics."
+        ),
+    )
     note: str | None = Field(default=None, max_length=2000)
 
 
@@ -108,7 +122,7 @@ class AgentFeedbackResponse(BaseModel):
 
 
 class KnowledgeSourceOut(BaseModel):
-    """One OSM documentation passage citation (never live map data)."""
+    """One documentation passage citation (never live map data, never SolarDSS numbers)."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -116,6 +130,9 @@ class KnowledgeSourceOut(BaseModel):
     section: str | None = None
     url: str
     score: float
+    evidence_class: Literal["knowledge_document"] = "knowledge_document"
+    domain: str | None = None
+    document_kind: str | None = None
 
 
 class ExecutionTraceStepOut(BaseModel):
@@ -140,6 +157,10 @@ class AgentQueryResponse(BaseModel):
     answer: str
     status: ResultStatus = "completed"
     knowledge_sources: list[KnowledgeSourceOut] = Field(default_factory=list)
+    evidence: EvidencePartition = Field(
+        default_factory=EvidencePartition,
+        description=("DETERMINISTIC ANALYTICAL EVIDENCE versus KNOWLEDGE / DOCUMENT EVIDENCE."),
+    )
     execution_trace: list[ExecutionTraceStepOut] = Field(default_factory=list)
     overpass_query: str | None = None
     geojson: GeoJsonFeatureCollection | None = None
@@ -165,9 +186,31 @@ class AgentQueryResponse(BaseModel):
         default=None,
         description="Structured GeoLoadST analysis results for the Energy Analysis Results UI.",
     )
+    solar_decision: SolarDecisionReport | None = Field(
+        default=None,
+        description="Structured solar decision slots. Never computed scientific indicators.",
+    )
+    solar_results: SolarDecisionSupportReport | None = Field(
+        default=None,
+        description=(
+            "Copied SolarDSS indicators and candidate comparison rows for the UI. "
+            "Never model-authored numbers."
+        ),
+    )
     charts: list[AnalysisChart] = Field(
         default_factory=list,
         description="Structured chart specs from the analysis engine. Empty when absent.",
+    )
+    analysis_result: ScientificAnalysisResult | None = Field(
+        default=None,
+        description=(
+            "Unified scientific-plugin result (metrics, layers, charts, provenance). "
+            "energy_analysis and solar_results remain for existing UI cards."
+        ),
+    )
+    agent_questions: list[AgentQuestion] = Field(
+        default_factory=list,
+        description="Clarification prompts for the Agent Questions panel. Empty when none.",
     )
     conversation_id: str | None = None
     execution_memory: ExecutionMemoryTrace | None = None
@@ -209,6 +252,8 @@ def knowledge_sources_from_passages(
             section=passage.section,
             url=passage.source_url,
             score=passage.score,
+            domain=passage.domain,
+            document_kind=passage.source_type,
         )
         for passage in ranked[:_UI_SOURCE_DISPLAY_LIMIT]
     ]
@@ -319,7 +364,14 @@ def to_agent_query_response(
     )
     simbench_live = any(source.kind == "simbench_network" for source in result.sources)
     energy_live = any(source.kind == "energy_analysis" for source in result.sources)
-    live_query_executed = osm_live
+    solar_live = result.solar_decision is not None
+    solar_map = any(source.kind == "solar_analysis" for source in result.sources) or (
+        result.solar_results is not None and result.geojson is not None
+    )
+    solar_docs = any(source.kind == "solar_documentation" for source in result.sources) or any(
+        passage.domain == SOLAR_PV_KNOWLEDGE_DOMAIN for passage in result.passages
+    )
+    live_query_executed = osm_live or solar_map
     attribution_parts: list[str] = []
     if osm_live:
         attribution_parts.append(OSM_ATTRIBUTION)
@@ -327,16 +379,32 @@ def to_agent_query_response(
         attribution_parts.append(SIMBENCH_ATTRIBUTION)
     if energy_live:
         attribution_parts.append(ENERGY_ANALYSIS_ATTRIBUTION)
+    if solar_live:
+        attribution_parts.append(SOLAR_DECISION_ATTRIBUTION)
+    if solar_map:
+        attribution_parts.append(SOLAR_MAP_ATTRIBUTION)
+    if solar_docs:
+        attribution_parts.append(SOLAR_KNOWLEDGE_ATTRIBUTION)
     attribution = "; ".join(attribution_parts) or None
     answer = sanitize_public_answer(
         result.answer,
         errors=list(result.errors),
         feature_count=result.feature_count,
     )
+    evidence = result.evidence
+    if not evidence.deterministic_analytical and not evidence.knowledge_documents:
+        evidence = partition_evidence(
+            passages=result.passages,
+            solar_decision=result.solar_decision,
+            analysis=result.analysis,
+            energy_analysis=result.energy_analysis,
+            solar_results=result.solar_results,
+        )
     return AgentQueryResponse(
         answer=answer,
         status=derive_result_status(result),
         knowledge_sources=knowledge_sources_from_passages(list(result.passages)),
+        evidence=evidence,
         execution_trace=execution_trace_from_events(list(result.trace)),
         overpass_query=result.overpass_query,
         geojson=geojson,
@@ -356,7 +424,11 @@ def to_agent_query_response(
         live_error_code=result.live_error_code,
         analysis=result.analysis,
         energy_analysis=result.energy_analysis,
+        solar_decision=result.solar_decision,
+        solar_results=result.solar_results,
         charts=list(result.charts),
+        analysis_result=result.analysis_result,
+        agent_questions=list(result.agent_questions),
         conversation_id=result.conversation_id,
         execution_memory=result.execution_memory,
     )

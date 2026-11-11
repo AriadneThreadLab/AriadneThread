@@ -1,9 +1,13 @@
 /**
- * Generic analysis-chart renderer. Renders bar, line, and scatter specs.
- * Does not know about GeoLoadST or any scientific engine.
+ * Generic analysis-chart renderer. Renders bar, line, scatter, and radar specs.
+ * Does not know about GeoLoadST or SolarDSS and never invents series values.
+ * SolarDSS chart_ids such as monthly_pv_generation, monthly_irradiation,
+ * candidate_ranking, criteria_comparison, pv_loss_breakdown,
+ * solar_resource_seasonality, and alternative_comparison render only when the
+ * engine already supplied finite y values.
  */
 
-const CHART_TYPES = new Set(["bar", "line", "scatter"]);
+const CHART_TYPES = new Set(["bar", "line", "scatter", "radar"]);
 const SERIES_COLORS = ["#0e7490", "#c026d3", "#b45309", "#1d4ed8"];
 
 export function renderAnalysisCharts(charts, root, section) {
@@ -102,7 +106,7 @@ function buildChartSvg(spec, tooltip) {
   const plot = svgEl("g", { transform: `translate(${pad.left} ${pad.top})` });
   svg.appendChild(plot);
 
-  const ticks = 4;
+  const ticks = spec.chart_type === "radar" ? 0 : 4;
   for (let i = 0; i <= ticks; i += 1) {
     const ratio = i / ticks;
     const y = innerH - ratio * innerH;
@@ -125,22 +129,104 @@ function buildChartSvg(spec, tooltip) {
     plot.appendChild(label);
   }
 
-  plot.appendChild(svgEl("line", { x1: 0, y1: innerH, x2: innerW, y2: innerH, class: "chart-axis" }));
-  plot.appendChild(svgEl("line", { x1: 0, y1: 0, x2: 0, y2: innerH, class: "chart-axis" }));
+  if (spec.chart_type !== "radar") {
+    plot.appendChild(svgEl("line", { x1: 0, y1: innerH, x2: innerW, y2: innerH, class: "chart-axis" }));
+    plot.appendChild(svgEl("line", { x1: 0, y1: 0, x2: 0, y2: innerH, class: "chart-axis" }));
+  }
 
-  if (spec.chart_type === "bar") {
+  if (spec.chart_type === "radar") {
+    drawRadar(plot, series, categories, innerW, innerH, tooltip);
+  } else if (spec.chart_type === "bar") {
     drawBars(plot, series, categories, innerW, innerH, yMin, span, tooltip);
   } else {
     drawLineOrScatter(plot, spec.chart_type, series, categories, innerW, innerH, yMin, span, tooltip);
   }
 
+  if (spec.chart_type !== "radar") {
+    categories.forEach((label, index) => {
+      const x = ((index + 0.5) / Math.max(categories.length, 1)) * innerW;
+      const text = svgEl("text", { x, y: innerH + 18, class: "chart-tick chart-tick-x" });
+      text.textContent = String(label);
+      plot.appendChild(text);
+    });
+  }
+  return svg;
+}
+
+function drawRadar(plot, series, categories, innerW, innerH, tooltip) {
+  const cx = innerW / 2;
+  const cy = innerH / 2;
+  const radius = Math.min(innerW, innerH) / 2 - 12;
+  const count = Math.max(categories.length, 3);
+  const axisMax = Math.max(
+    0,
+    ...series.flatMap((item) => item.data.map((point) => point.y)),
+  ) || 1;
+  for (let ring = 1; ring <= 4; ring += 1) {
+    const r = (radius * ring) / 4;
+    const pts = [];
+    for (let i = 0; i < count; i += 1) {
+      const angle = (Math.PI * 2 * i) / count - Math.PI / 2;
+      pts.push(`${cx + Math.cos(angle) * r},${cy + Math.sin(angle) * r}`);
+    }
+    plot.appendChild(
+      svgEl("polygon", {
+        points: pts.join(" "),
+        class: "chart-radar-grid",
+        fill: "none",
+      }),
+    );
+  }
   categories.forEach((label, index) => {
-    const x = ((index + 0.5) / Math.max(categories.length, 1)) * innerW;
-    const text = svgEl("text", { x, y: innerH + 18, class: "chart-tick chart-tick-x" });
+    const angle = (Math.PI * 2 * index) / count - Math.PI / 2;
+    const x = cx + Math.cos(angle) * radius;
+    const y = cy + Math.sin(angle) * radius;
+    plot.appendChild(
+      svgEl("line", { x1: cx, y1: cy, x2: x, y2: y, class: "chart-radar-axis" }),
+    );
+    const text = svgEl("text", {
+      x: cx + Math.cos(angle) * (radius + 12),
+      y: cy + Math.sin(angle) * (radius + 12),
+      class: "chart-tick chart-tick-x",
+    });
     text.textContent = String(label);
     plot.appendChild(text);
   });
-  return svg;
+  series.forEach((item, seriesIndex) => {
+    const color = SERIES_COLORS[seriesIndex % SERIES_COLORS.length];
+    const coords = categories.map((label, index) => {
+      const point = item.data.find((entry) => String(entry.x) === String(label));
+      const value = point ? point.y : 0;
+      const angle = (Math.PI * 2 * index) / count - Math.PI / 2;
+      const r = (Math.max(value, 0) / axisMax) * radius;
+      return {
+        x: cx + Math.cos(angle) * r,
+        y: cy + Math.sin(angle) * r,
+        label,
+        value,
+      };
+    });
+    plot.appendChild(
+      svgEl("polygon", {
+        points: coords.map((pt) => `${pt.x},${pt.y}`).join(" "),
+        class: "chart-radar-area",
+        fill: color,
+        "fill-opacity": "0.18",
+        stroke: color,
+      }),
+    );
+    for (const pt of coords) {
+      const dot = svgEl("circle", {
+        cx: pt.x,
+        cy: pt.y,
+        r: 4,
+        class: "chart-point",
+        fill: color,
+      });
+      bindTooltip(dot, tooltip, item.name, pt.label, pt.value);
+      plot.appendChild(dot);
+    }
+  });
 }
 
 function drawBars(plot, series, categories, innerW, innerH, yMin, span, tooltip) {

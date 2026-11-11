@@ -7,7 +7,7 @@ is trained from it — in two systems that never call each other.
 
 | Term | What it actually is | Where it lives |
 |---|---|---|
-| **RAG** | Runtime knowledge retrieval. The model reads OSM documentation while answering. | `app/rag/`, `search_osm_knowledge` |
+| **RAG** | Runtime knowledge retrieval. The model reads OSM or solar-PV documentation while answering. | `app/rag/`, `search_osm_knowledge`, `search_solar_knowledge` |
 | **Active learning** | Selecting the most informative interactions for a human to review. | `app/active_learning/` |
 | **Feedback loop** | Collecting real reactions to real answers. | `POST /api/v1/agent/feedback`, CLI review |
 | **Fine-tuning** | Changing model behaviour using curated examples. | `finetuning/` |
@@ -58,6 +58,7 @@ subsystem can never turn a good answer into an HTTP error.
 | Module | Responsibility |
 |---|---|
 | `contracts.py` | Candidate model, reason/status enums, repository protocol |
+| `solar.py` | SolarDSS workflow snapshot and routing/preference export target |
 | `sanitization.py` | Reject hidden reasoning, redact credentials |
 | `signals.py` | Trigger extraction from the trace; model vs external attribution |
 | `scoring.py` | Deterministic informativeness score |
@@ -71,11 +72,18 @@ subsystem can never turn a good answer into an HTTP error.
 
 Request metadata (`request_id`, `created_at`, `model_id`, `prompt_version`,
 `tool_schema_version`), the user query, task type and task signature, the
-validated `analysis_plan` and `comparison_plan`, the final answer, the tool
+validated `analysis_plan` and `comparison_plan`, a SolarDSS `solar_workflow`
+snapshot when the turn was a solar decision, the final answer, the tool
 sequence, tool validation events, place-resolution events, a compact RAG
 evidence summary, the metric selection summary, error codes split into
 model-attributed and external, warnings, selection reasons, the informativeness
 score, review state, any human correction, dataset split and schema version.
+
+The solar snapshot stores the original structured decision, indicator
+provenance copies, ranking profile, model planning decision, expert feedback,
+corrected preference/label and provenance. Indicator `values` are never the
+export target. Active learning does not replace PVGIS, pvlib, terrain
+calculations, GIS distances or MCDA formulas.
 
 It does **not** hold GeoJSON, prompts, retrieved passage bodies, credentials or
 model reasoning.
@@ -188,6 +196,34 @@ Feedback queues a run for review. It never approves anything and never triggers
 training. If the run was filtered out earlier, the bounded recent-run cache lets
 the service materialise the candidate retroactively.
 
+SolarDSS expert labels use the same endpoint. They never change PV physics:
+
+```bash
+curl -X POST localhost:8100/api/v1/agent/feedback -H 'content-type: application/json' -d '{
+  "request_id": "…",
+  "sentiment": "negative",
+  "solar_feedback": {
+    "kind": "candidate_accept_reject",
+    "labels": [
+      {
+        "candidate_id": "A",
+        "original_rank": 1,
+        "decision": "reject",
+        "reason": "Grid connection assumption is unrealistic"
+      }
+    ],
+    "reason": "Grid connection assumption is unrealistic"
+  }
+}'
+```
+
+That records the original structured decision, indicator provenance, ranking
+profile, model planning decision, expert feedback, corrected preference/label
+and provenance. The export target is `SolarDecisionLearningTarget`: intent
+routing, capability/tool selection, follow-up questions and preference or
+ranking labels. It cannot carry PVGIS, pvlib, terrain, GIS-distance or MCDA
+numbers.
+
 ### CLI
 
 ```bash
@@ -236,7 +272,9 @@ read from the database.
 `user request → AnalysisPlan`, using the exact `AnalysisPlan` model that
 `analyze_features` validates. No parallel training schema exists anywhere.
 `MultiTargetComparisonPlan` is available as a second task for the
-radius-bearing planner schema.
+radius-bearing planner schema. `SolarDecisionLearningTarget` is a third task
+for SolarDSS routing and preference labels; it is not a substitute for PVGIS,
+pvlib, terrain, GIS distances or MCDA.
 
 Because `AnalysisPlan` binds targets to backend-generated dataset references,
 the exported prompt states which references exist — rendered from the validated

@@ -108,4 +108,31 @@ def format_tool_argument_observation(
             payload["tool_error"]["allowed_capabilities"] = capability_error["allowed_capabilities"]
         else:
             payload["tool_error"]["allowed_capabilities"] = list(registered_capability_ids())
+    elif tool_name == "analyze_solar_site":
+        from app.solar.capabilities import (
+            is_allowed_host_capability,
+            registered_capability_ids,
+            unknown_capability_payload,
+        )
+
+        payload["tool_error"]["hint"] = (
+            "Extract solar intent, slots, and a registered capability_id. "
+            "Do not send GHI, slope, elevation, or other indicators. Example: "
+            '{"mode":"site_selection","site_selection_scope":"region_search",'
+            '"project_type":"utility_scale","region_name":"Vienna",'
+            '"capability_id":"solar_site_selection"}'
+        )
+        received = None if arguments is None else arguments.get("capability_id")
+        if (
+            isinstance(received, str)
+            and received.strip()
+            and not is_allowed_host_capability(received.strip())
+        ):
+            capability_error = unknown_capability_payload(received)
+            payload["error_code"] = capability_error["error_code"]
+            payload["received"] = capability_error["received"]
+            payload["allowed_capabilities"] = capability_error["allowed_capabilities"]
+            payload["tool_error"]["allowed_capabilities"] = capability_error["allowed_capabilities"]
+        else:
+            payload["tool_error"]["allowed_capabilities"] = list(registered_capability_ids())
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))

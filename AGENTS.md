@@ -28,11 +28,21 @@ before making structural changes.
 
 ## Non-negotiable design rules
 
-1. **Documentation is not map data.** `search_osm_knowledge` returns OSM
- documentation; `query_osm` returns live OSM features; `simbench_query` returns
- SimBench network data. Never let an answer, an observation or a response field
- blur these sources. `geojson` is populated only by `query_osm`,
- `simbench_query`, or `analyze_energy_grid`.
+1. **Documentation is not map data and not SolarDSS numbers.**
+   `search_osm_knowledge` returns OSM documentation; `search_solar_knowledge`
+   returns solar-PV methodology, standards, and regulatory notes;
+   `query_osm` returns live OSM features; `simbench_query` returns
+   SimBench network data;    `analyze_solar_site` returns structured solar decision
+   slots, never computed indicators. SolarDSS GeoJSON, charts, and indicator
+   values may be copied through the integration layer for the existing UI;
+   Ariadne never invents geometries or chart series and the LLM never fills
+   them. Never use RAG-generated values as
+   replacements for deterministic SolarDSS indicators. Responses partition
+   DETERMINISTIC ANALYTICAL EVIDENCE from KNOWLEDGE / DOCUMENT EVIDENCE and
+   keep citations. Never let an answer, an observation or a
+   response field blur these sources. `geojson` is populated only by `query_osm`,
+   `simbench_query`, `analyze_energy_grid`, or SolarDSS geometry copied through
+   `analyze_solar_site`.
 2. **Never invent OSM results.** Empty results are reported as empty.
 3. **No model-authored Overpass QL.** The model fills in `OsmFeatureQuery`;
    `build_overpass_query` renders it. If a new capability is needed, extend the
@@ -49,9 +59,12 @@ before making structural changes.
 8. **No committed password defaults.** `DATABASE_URL` comes from `.env` /
    the environment. `.env.example` uses placeholders only.
 9. **The runtime never trains.** `app/active_learning` selects and exports; it
-   must not start training, touch weights or promote a model. `finetuning/` is a
-   separate package with its own dependencies: `app` never imports it, it never
-   imports `app`, and the two meet only at a versioned dataset file.
+   must not start training, touch weights or promote a model. It must not
+   recompute or replace PVGIS, pvlib, terrain, GIS-distance or MCDA values.
+   Indicator numbers may be stored as SolarDSS provenance copies only.
+   `finetuning/` is a separate package with its own dependencies: `app` never
+   imports it, it never imports `app`, and the two meet only at a versioned
+   dataset file.
 10. **Only reviewed data becomes training data.** A candidate is exportable only
    with `approved_for_training` plus a validated success or a human correction.
 

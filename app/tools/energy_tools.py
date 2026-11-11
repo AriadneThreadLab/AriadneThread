@@ -19,6 +19,7 @@ from typing import Any, Literal, Protocol
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.analytics.charts import AnalysisChart, parse_charts
+from app.analytics.plugin_result import ScientificAnalysisResult, scientific_result_from_energy
 from app.core.errors import (
     EnergyAnalysisFailedError,
     EnergyAnalysisInfeasibleError,
@@ -138,6 +139,7 @@ class AnalyzeEnergyGridResult(BaseModel):
     detail: str = ""
     analysis: EnergyAnalysisReport | None = None
     charts: list[AnalysisChart] = Field(default_factory=list)
+    analysis_result: ScientificAnalysisResult | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -322,6 +324,11 @@ class AnalyzeEnergyGridTool:
             detail=snapshot.detail,
             analysis=report,
             charts=list(snapshot.charts),
+            analysis_result=scientific_result_from_energy(
+                report,
+                geojson=layer if feature_count else None,
+                charts=list(snapshot.charts),
+            ),
         )
         return ToolOutcome(observation=observation, payload=payload)
 

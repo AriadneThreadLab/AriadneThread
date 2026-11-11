@@ -23,6 +23,7 @@ from app.active_learning.contracts import (
     TaskType,
 )
 from app.active_learning.export import export_dataset, write_export
+from app.active_learning.solar import SolarDecisionLearningTarget, SolarWorkflowSnapshot
 
 from tests.active_learning_fixtures import ANALYSIS_PLAN, COMPARISON_QUERY
 
@@ -151,3 +152,63 @@ def test_split_membership_is_recorded_for_lineage(tmp_path):
         assert entry.candidate_id in export.manifest.split_candidate_ids[entry.split.value]
     counted = sum(export.manifest.split_counts[split.value] for split in DatasetSplit)
     assert counted == export.manifest.example_count
+
+
+SOLAR_QUESTIONS = [
+    "Rank these solar rooftops A and B in Tehran.",
+    "Find a solar farm site in Yazd.",
+    "I own this house; evaluate rooftop PV in Shiraz.",
+    "Rank candidates C and D for a ground-mounted plant near Qom.",
+    "Search for utility-scale solar sites inside this AOI.",
+    "Compare these solar candidates E and F without changing the physics.",
+]
+
+
+def approved_solar_candidates() -> list[ActiveLearningCandidate]:
+    target = SolarDecisionLearningTarget(
+        science="not_computed",
+        mode="site_selection",
+        site_selection_scope="candidate_ranking",
+        capability_id="solar_candidate_ranking",
+    ).model_dump(mode="json")
+    return [
+        ActiveLearningCandidate(
+            candidate_id=f"solar-{index:04d}",
+            request_id=f"solar-req-{index}",
+            user_query=question,
+            task_type=TaskType.SOLAR_DECISION,
+            task_signature=f"solar_decision|ranking|scope{index}",
+            query_hash=f"solar-hash-{index}",
+            solar_workflow=SolarWorkflowSnapshot(),
+            corrected_output=target,
+            outcome_successful=True,
+            review_status=ReviewStatus.APPROVED,
+            approved_for_training=True,
+            model_id="deepseek-r1:7b",
+            prompt_version="ariadne-system-prompt-1",
+        )
+        for index, question in enumerate(SOLAR_QUESTIONS)
+    ]
+
+
+def test_exported_solar_dataset_is_readable_by_the_finetuning_pipeline(tmp_path):
+    export = export_dataset(
+        approved_solar_candidates(),
+        dataset_version="v1",
+        task=ExportTask.SOLAR_DECISION,
+        exported_at=EXPORTED_AT,
+    )
+    write_export(export, tmp_path)
+
+    bundle = dataset_module.load_bundle(tmp_path, task="solar_decision", dataset_version="v1")
+    assert bundle.dataset_version == "v1"
+    assert bundle.manifest["target_schema_name"] == "SolarDecisionLearningTarget"
+    assert bundle.target_schema["title"] == "SolarDecisionLearningTarget"
+    for split in ("train", "validation", "test"):
+        for sample in bundle.split(split):
+            assert schema_module.is_valid(sample.reference(), bundle.target_schema)
+            payload = sample.reference()
+            assert payload["science"] == "not_computed"
+            assert "ghi" not in payload
+            assert "pvgis" not in payload
+            assert "pvlib" not in payload or payload.get("does_not_replace")

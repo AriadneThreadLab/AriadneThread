@@ -35,6 +35,17 @@ class GeoLoadSTHealth(BaseModel):
     capabilities: list[str] = Field(default_factory=list)
 
 
+class SolarDSSHealth(BaseModel):
+    """Solar plugin probe. Never runs SolarDSS science."""
+
+    model_config = ConfigDict(frozen=True)
+
+    ariadne_solar_available: bool
+    solardss_available: bool
+    version: str | None = None
+    capabilities: list[str] = Field(default_factory=list)
+
+
 class HealthResponse(BaseModel):
     """Service liveness and effective configuration summary."""
 
@@ -48,6 +59,7 @@ class HealthResponse(BaseModel):
     embedding_model: str
     embedding_dim: int
     geoloadst: GeoLoadSTHealth
+    solardss: SolarDSSHealth
 
 
 class ReadyCheck(BaseModel):
@@ -76,6 +88,7 @@ async def health(settings: SettingsDep) -> HealthResponse:
         embedding_model=settings.bge_model_name,
         embedding_dim=settings.embedding_dim,
         geoloadst=geoloadst_health(),
+        solardss=solardss_health(),
     )
 
 
@@ -86,6 +99,15 @@ async def health(settings: SettingsDep) -> HealthResponse:
 )
 async def geoloadst_health_endpoint() -> GeoLoadSTHealth:
     return geoloadst_health()
+
+
+@router.get(
+    "/health/solardss",
+    response_model=SolarDSSHealth,
+    summary="SolarDSS plugin health",
+)
+async def solardss_health_endpoint() -> SolarDSSHealth:
+    return solardss_health()
 
 
 @router.get(
@@ -134,6 +156,49 @@ def geoloadst_health() -> GeoLoadSTHealth:
     version = payload.get("version")
     return GeoLoadSTHealth(
         geoloadst_available=bool(payload.get("geoloadst_available")),
+        version=version if isinstance(version, str) and version else None,
+        capabilities=capabilities,
+    )
+
+
+def solardss_health() -> SolarDSSHealth:
+    """Read the solar plugin health payload. Does not run SolarDSS engines."""
+    fallback = SolarDSSHealth(
+        ariadne_solar_available=False,
+        solardss_available=False,
+        version=None,
+        capabilities=list(
+            (
+                "solar_site_indicators",
+                "solar_site_selection",
+                "solar_candidate_ranking",
+                "solar_fixed_site_analysis",
+                "solar_pv_design",
+                "solar_yield_estimation",
+                "solar_compare_candidates",
+            )
+        ),
+    )
+    if find_spec("ariadne_solar") is None:
+        return fallback
+    try:
+        module = import_module("ariadne_solar")
+        reporter = getattr(module, "health_status", None)
+        if not callable(reporter):
+            return fallback
+        payload = reporter()
+    except Exception as exc:
+        logger.warning("solardss health probe failed: %s", type(exc).__name__)
+        return fallback
+    if not isinstance(payload, dict):
+        return fallback
+    capabilities = [str(item) for item in payload.get("capabilities", ()) if isinstance(item, str)]
+    if not capabilities:
+        capabilities = list(fallback.capabilities)
+    version = payload.get("version")
+    return SolarDSSHealth(
+        ariadne_solar_available=True,
+        solardss_available=bool(payload.get("solardss_available")),
         version=version if isinstance(version, str) and version else None,
         capabilities=capabilities,
     )

@@ -7,15 +7,28 @@ observations are ever appended to the LLM conversation.
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, Literal
 
 from app.agent.contracts import SourceReference
 from app.agent.geojson_combine import combine_target_feature_collections
 from app.analytics.charts import AnalysisChart
 from app.analytics.contracts import AnalysisBlock, KnowledgeSourceRef
 from app.analytics.datasets import DatasetRegistry
+from app.analytics.plugin_result import (
+    AgentQuestion,
+    ScientificAnalysisResult,
+    agent_questions_from_solar,
+    scientific_result_from_energy,
+    scientific_result_from_solar,
+)
 from app.osm.contracts import GeoJsonFeatureCollection
 from app.rag.contracts import RetrievedPassage
+from app.solar.contracts import SolarDecisionReport
+from app.solar.display import (
+    SOLAR_MAP_LAYER_NAME,
+    SolarDecisionSupportReport,
+    overlay_routing_slots,
+)
 from app.tools.analyze_features import TOOL_NAME as ANALYZE_FEATURES
 from app.tools.analyze_features import AnalyzeFeaturesResult
 from app.tools.energy_report import LAYER_SIMBENCH, EnergyAnalysisReport, layer_name_for
@@ -31,8 +44,16 @@ from app.tools.search_osm_knowledge import (
 from app.tools.search_osm_knowledge import (
     SearchOsmKnowledgeResult,
 )
+from app.tools.search_solar_knowledge import (
+    TOOL_NAME as SEARCH_SOLAR_KNOWLEDGE,
+)
+from app.tools.search_solar_knowledge import (
+    SearchSolarKnowledgeResult,
+)
 from app.tools.simbench_tools import TOOL_NAME as SIMBENCH_QUERY
 from app.tools.simbench_tools import SimBenchQueryResult
+from app.tools.solar_tools import TOOL_NAME as ANALYZE_SOLAR_SITE
+from app.tools.solar_tools import AnalyzeSolarSiteResult
 
 _TAG_TITLE_RE = re.compile(
     r"^Tag:\s*([A-Za-z0-9_:-]+)=([A-Za-z0-9_:-]+)$",
@@ -67,6 +88,10 @@ class ResultAccumulator:
         self.charts: list[AnalysisChart] = []
         self.energy_workflow_stopped: bool = False
         self.energy_terminal_error_code: str | None = None
+        self.solar_decision: SolarDecisionReport | None = None
+        self.solar_results: SolarDecisionSupportReport | None = None
+        self.analysis_result: ScientificAnalysisResult | None = None
+        self.agent_questions: list[AgentQuestion] = []
 
     def absorb(self, tool_name: str, payload: Any) -> None:
         if tool_name == QUERY_OSM and isinstance(payload, QueryOsmResult):
@@ -74,6 +99,9 @@ class ResultAccumulator:
             return
         if tool_name == SEARCH_OSM_KNOWLEDGE and isinstance(payload, SearchOsmKnowledgeResult):
             self._absorb_knowledge(payload)
+            return
+        if tool_name == SEARCH_SOLAR_KNOWLEDGE and isinstance(payload, SearchSolarKnowledgeResult):
+            self._absorb_solar_knowledge(payload)
             return
         if tool_name == RESOLVE_PLACE and isinstance(payload, PlaceResolutionResult):
             self._absorb_place(payload)
@@ -86,6 +114,9 @@ class ResultAccumulator:
             return
         if tool_name == ANALYZE_ENERGY_GRID and isinstance(payload, AnalyzeEnergyGridResult):
             self._absorb_energy_analysis(payload)
+            return
+        if tool_name == ANALYZE_SOLAR_SITE and isinstance(payload, AnalyzeSolarSiteResult):
+            self._absorb_solar_decision(payload)
 
     def _absorb_query_osm(self, result: QueryOsmResult) -> None:
         self.absorb_osm_target_collection(
@@ -192,6 +223,14 @@ class ResultAccumulator:
             self.energy_analysis = result.analysis
         if result.charts:
             self.charts.extend(result.charts)
+        if result.analysis_result is not None:
+            self.analysis_result = result.analysis_result
+        elif result.analysis is not None:
+            self.analysis_result = scientific_result_from_energy(
+                result.analysis,
+                geojson=result.geojson if result.geojson is not None else result.spatial_layer,
+                charts=list(result.charts),
+            )
         layer = result.geojson if result.geojson is not None else result.spatial_layer
         features = layer.get("features") if isinstance(layer, dict) else None
         if not isinstance(features, list) or not features:
@@ -207,6 +246,91 @@ class ResultAccumulator:
             self.geojson = collection
             self.feature_count = count
             self.scope_summary = result.scope_summary
+        else:
+            combined = combine_target_feature_collections(self._target_collections)
+            self.geojson = combined
+            self.feature_count = len(combined.get("features", []))
+            summaries = [f"{label}: {count}" for label, count in self.target_feature_counts.items()]
+            self.scope_summary = "Comparison targets — " + "; ".join(summaries)
+        self.live_query_failed = False
+        self.live_error_code = None
+
+    def _absorb_solar_decision(self, result: AnalyzeSolarSiteResult) -> None:
+        """Attach routed slots and copied SolarDSS map/indicator outputs.
+
+        Routing never invents GeoJSON or GHI. Plugin copies are attached only
+        when the integration layer already returned them.
+        """
+        if result.warnings:
+            self.warnings.extend(result.warnings)
+        if result.report is not None:
+            self.solar_decision = result.report
+        self.agent_questions = list(result.agent_questions) or agent_questions_from_solar(
+            result.questions
+        )
+        if result.analysis_result is not None:
+            self.analysis_result = result.analysis_result
+        if result.charts:
+            self.charts.extend(result.charts)
+        support = result.support
+        if support is not None:
+            self.solar_results = overlay_routing_slots(
+                support,
+                mode=result.mode,
+                project_type=result.project_type,
+                capability_id=result.capability,
+            )
+        elif result.geojson is not None or result.charts:
+            self.solar_results = overlay_routing_slots(
+                SolarDecisionSupportReport(
+                    capability_id=result.capability,
+                    decision_mode=result.mode,
+                    project_type=result.project_type,
+                ),
+                mode=result.mode,
+                project_type=result.project_type,
+                capability_id=result.capability,
+            )
+        if result.analysis_result is None and (
+            self.solar_results is not None or result.geojson is not None or result.charts
+        ):
+            self.analysis_result = scientific_result_from_solar(
+                self.solar_results,
+                geojson=result.geojson,
+                charts=list(result.charts),
+                capability_id=result.capability,
+            )
+        if result.detail and not self.scope_summary:
+            self.scope_summary = f"Solar decision {result.status}" + (
+                f" capability={result.capability}" if result.capability else ""
+            )
+        features: list[Any] | None = None
+        if isinstance(result.geojson, dict):
+            raw_features = result.geojson.get("features")
+            if isinstance(raw_features, list):
+                features = raw_features
+        if not features:
+            return
+        self._add_source(
+            SourceReference(
+                kind="solar_analysis",
+                title=result.source_title or SOLAR_MAP_LAYER_NAME,
+                url=None,
+            )
+        )
+        count = result.feature_count if result.feature_count is not None else len(features)
+        collection: GeoJsonFeatureCollection = {
+            "type": "FeatureCollection",
+            "features": features,
+        }
+        target = SOLAR_MAP_LAYER_NAME
+        self.target_feature_counts[target] = count
+        self._target_collections.append((target, collection))
+        if len(self._target_collections) == 1:
+            self.geojson = collection
+            self.feature_count = count
+            if result.detail:
+                self.scope_summary = result.detail
         else:
             combined = combine_target_feature_collections(self._target_collections)
             self.geojson = combined
@@ -240,10 +364,18 @@ class ResultAccumulator:
             self.feature_count = None
 
     def _absorb_knowledge(self, result: SearchOsmKnowledgeResult) -> None:
-        self.absorb_documentation_passages(result.passages)
+        self.absorb_documentation_passages(result.passages, kind="osm_documentation")
 
-    def absorb_documentation_passages(self, passages: list[RetrievedPassage]) -> None:
-        """Attach OSM documentation citations from a live search or restored memory."""
+    def _absorb_solar_knowledge(self, result: SearchSolarKnowledgeResult) -> None:
+        self.absorb_documentation_passages(result.passages, kind="solar_documentation")
+
+    def absorb_documentation_passages(
+        self,
+        passages: list[RetrievedPassage],
+        *,
+        kind: Literal["osm_documentation", "solar_documentation"] = "osm_documentation",
+    ) -> None:
+        """Attach documentation citations from a live search or restored memory."""
         self.passages.extend(passages)
         for passage in passages:
             title = passage.document_title
@@ -251,7 +383,7 @@ class ResultAccumulator:
                 title = f"{title} > {passage.section}"
             self._add_source(
                 SourceReference(
-                    kind="osm_documentation",
+                    kind=kind,
                     title=title,
                     url=passage.source_url,
                 )

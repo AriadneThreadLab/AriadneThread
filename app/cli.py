@@ -5,6 +5,9 @@ Usage:
     ./.venv/bin/python -m app.cli ingest-osm-knowledge
     ./.venv/bin/python -m app.cli index-osm-knowledge
     ./.venv/bin/python -m app.cli search-osm-knowledge --query "..."
+    ./.venv/bin/python -m app.cli ingest-solar-knowledge
+    ./.venv/bin/python -m app.cli index-solar-knowledge
+    ./.venv/bin/python -m app.cli search-solar-knowledge --query "..."
     ./.venv/bin/python -m app.cli agent-query --message "Find public parks in Berlin"
     ./.venv/bin/python -m app.cli list-active-learning-candidates --review-queue
     ./.venv/bin/python -m app.cli export-training-dataset --dataset-version v1
@@ -27,10 +30,13 @@ from app.core.logging import configure_logging
 from app.db.session import Database, DatabaseConfig
 from app.embeddings.cache import require_model_cached
 from app.embeddings.factory import build_bge_m3_provider
+from app.rag.contracts import OSM_KNOWLEDGE_DOMAIN, SOLAR_PV_KNOWLEDGE_DOMAIN
 from app.rag.indexing import index_osm_knowledge
 from app.rag.ingest import IngestConfig, ingest_osm_knowledge
 from app.rag.mediawiki import MediaWikiClient
+from app.rag.persist import SqlAlchemyKnowledgeRepository
 from app.rag.retriever import SessionBoundKnowledgeRetriever
+from app.rag.solar_ingest import ingest_solar_knowledge
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -66,6 +72,33 @@ def build_parser() -> argparse.ArgumentParser:
     )
     search.add_argument("--query", required=True, help="Natural-language search query.")
     search.add_argument(
+        "--top-k",
+        type=int,
+        default=None,
+        help="Number of passages to return (default: RAG_TOP_K).",
+    )
+
+    subparsers.add_parser(
+        "ingest-solar-knowledge",
+        help="Persist the packaged solar-PV knowledge corpus (offline; no crawl).",
+    )
+
+    solar_index = subparsers.add_parser(
+        "index-solar-knowledge",
+        help="Embed pending solar-PV knowledge_chunks with BGE-M3 into pgvector.",
+    )
+    solar_index.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-embed all solar-PV chunks, including those that already have vectors.",
+    )
+
+    solar_search = subparsers.add_parser(
+        "search-solar-knowledge",
+        help="Diagnostic semantic search over the indexed solar-PV knowledge corpus.",
+    )
+    solar_search.add_argument("--query", required=True, help="Natural-language search query.")
+    solar_search.add_argument(
         "--top-k",
         type=int,
         default=None,
@@ -216,7 +249,35 @@ async def _run_ingest(settings: Settings, *, stop_on_error: bool) -> int:
     return 1 if summary.failed else 0
 
 
-async def _run_index(settings: Settings, *, force: bool) -> int:
+async def _run_ingest_solar(settings: Settings) -> int:
+    database = Database(DatabaseConfig(url=settings.database_url))
+    try:
+        async with database.session() as session:
+            repository = SqlAlchemyKnowledgeRepository(session)
+            results = await ingest_solar_knowledge(
+                repository,
+                max_chars=settings.rag_chunk_max_chars,
+                min_chars=settings.rag_chunk_min_chars,
+            )
+    except GeoAgentError as exc:
+        print(f"error: {exc.message}", file=sys.stderr)
+        return 1
+    finally:
+        await database.dispose()
+
+    inserted = sum(1 for item in results if item.status == "inserted")
+    updated = sum(1 for item in results if item.status == "updated")
+    unchanged = sum(1 for item in results if item.status == "unchanged")
+    print(
+        "Solar-PV knowledge ingest complete: "
+        f"inserted={inserted} updated={updated} unchanged={unchanged}"
+    )
+    for item in results:
+        print(f"  - {item.status}: {item.source_url} (chunks={item.chunk_count})")
+    return 0
+
+
+async def _run_index(settings: Settings, *, force: bool, domain: str = OSM_KNOWLEDGE_DOMAIN) -> int:
     try:
         cache_root = require_model_cached(settings.bge_model_name)
     except EmbeddingError as exc:
@@ -233,6 +294,7 @@ async def _run_index(settings: Settings, *, force: bool) -> int:
         result = await index_osm_knowledge(
             database,
             embedder,
+            domain=domain,
             batch_size=settings.bge_batch_size,
             force=force,
         )
@@ -246,21 +308,28 @@ async def _run_index(settings: Settings, *, force: bool) -> int:
         await embedder.aclose()
         await database.dispose()
 
+    label = "OSM" if domain == OSM_KNOWLEDGE_DOMAIN else "solar-PV"
     print(
-        "OSM knowledge index complete: "
+        f"{label} knowledge index complete: "
         f"selected={result.selected} embedded={result.embedded} "
         f"skipped={result.skipped} batches={result.batches}"
     )
     return 0
 
 
-async def _run_search(settings: Settings, *, query: str, top_k: int | None) -> int:
+async def _run_search(
+    settings: Settings,
+    *,
+    query: str,
+    top_k: int | None,
+    domain: str = OSM_KNOWLEDGE_DOMAIN,
+) -> int:
     database = Database(DatabaseConfig(url=settings.database_url))
     embedder = build_bge_m3_provider(settings)
     retriever = SessionBoundKnowledgeRetriever(database, embedder)
     limit = top_k if top_k is not None else settings.rag_top_k
     try:
-        passages = await retriever.search(query, top_k=limit)
+        passages = await retriever.search(query, top_k=limit, domain=domain)
     except (EmbeddingError, GeoAgentError) as exc:
         print(f"error: {exc.message}", file=sys.stderr)
         return 1
@@ -268,11 +337,15 @@ async def _run_search(settings: Settings, *, query: str, top_k: int | None) -> i
         await embedder.aclose()
         await database.dispose()
 
+    label = "OSM documentation" if domain == OSM_KNOWLEDGE_DOMAIN else "solar-PV knowledge"
     if not passages:
-        print("No OSM documentation passages matched.")
+        print(f"No {label} passages matched.")
         return 0
 
-    print(f"Found {len(passages)} OSM documentation passage(s) (not live map data):")
+    extra = (
+        " (not live map data)" if domain == OSM_KNOWLEDGE_DOMAIN else " (not SolarDSS indicators)"
+    )
+    print(f"Found {len(passages)} {label} passage(s){extra}:")
     for index, passage in enumerate(passages, start=1):
         heading = passage.document_title
         if passage.section:
@@ -408,6 +481,19 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(_run_index(settings, force=args.force))
     if args.command == "search-osm-knowledge":
         return asyncio.run(_run_search(settings, query=args.query, top_k=args.top_k))
+    if args.command == "ingest-solar-knowledge":
+        return asyncio.run(_run_ingest_solar(settings))
+    if args.command == "index-solar-knowledge":
+        return asyncio.run(_run_index(settings, force=args.force, domain=SOLAR_PV_KNOWLEDGE_DOMAIN))
+    if args.command == "search-solar-knowledge":
+        return asyncio.run(
+            _run_search(
+                settings,
+                query=args.query,
+                top_k=args.top_k,
+                domain=SOLAR_PV_KNOWLEDGE_DOMAIN,
+            )
+        )
     if args.command == "agent-query":
         return asyncio.run(_run_agent_query(settings, message=args.message))
     if args.command == "diagnose-ollama":

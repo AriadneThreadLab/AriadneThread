@@ -160,6 +160,7 @@ async def agent_feedback(
         sentiment=body.sentiment,
         failure_category=body.failure_category,
         corrected_output=body.corrected_output,
+        solar_feedback=body.solar_feedback,
         note=body.note,
     )
     try:

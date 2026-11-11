@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from app.analytics.charts import bar_chart, line_chart, parse_charts
+from app.analytics.charts import bar_chart, line_chart, parse_charts, radar_chart
 from app.tools.energy_report import LAYER_PCA, build_energy_analysis_report
 
 
@@ -85,6 +85,21 @@ def test_helpers_omit_empty_point_lists() -> None:
     )
     assert chart is not None
     assert chart.series[0].data[0].y == 0.5
+
+
+def test_radar_chart_keeps_copied_points() -> None:
+    chart = radar_chart(
+        chart_id="breakdown",
+        title="Criteria",
+        points=[("a", 0.2), ("b", 0.8)],
+        x_label="c",
+        y_label="v",
+        series_name="copied",
+    )
+    assert chart is not None
+    assert chart.chart_type == "radar"
+    parsed = parse_charts([chart.model_dump()])
+    assert parsed[0].series[0].data[1].y == 0.8
 
 
 def test_pca_report_counts_copied_cluster_ids() -> None:

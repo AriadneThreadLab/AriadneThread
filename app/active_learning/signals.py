@@ -22,8 +22,10 @@ from app.active_learning.contracts import (
     TaskType,
     ToolValidationEvent,
 )
+from app.active_learning.solar import ANALYZE_SOLAR_SITE_TOOL, asked_provider_filled_fields
 from app.agent.comparison_workflow import is_multi_target_landmark_comparison
 from app.agent.contracts import GeoAgentResponse
+from app.solar.intent import is_solar_decision_request, is_solar_knowledge_request
 from app.tools.resolve_place import TOOL_NAME as RESOLVE_PLACE
 
 #: Failures owned by an external dependency. On their own these are an
@@ -64,6 +66,8 @@ MODEL_ERROR_CODES: frozenset[str] = frozenset(
         "invalid_model_response",
         "llm_timeout",
         "overpass_query_build_error",
+        "solar_unknown_capability",
+        "unknown_solar_capability",
     }
 )
 
@@ -124,6 +128,9 @@ class RunSignals:
     outcome_successful: bool = False
     feature_concept: str | None = None
     scope_kind: str = "none"
+    solar_capability: str | None = None
+    solar_status: str | None = None
+    solar_question_fields: tuple[str, ...] = ()
 
     @property
     def has_model_signal(self) -> bool:
@@ -173,6 +180,9 @@ def _reasons_for_error(code: str, message: str) -> set[SelectionReason]:
         reasons.add(SelectionReason.PLACE_RESOLUTION_AMBIGUOUS)
     elif code == "place_resolution_error":
         reasons.add(SelectionReason.PLACE_RESOLUTION_FAILED)
+    elif code in {"solar_unknown_capability", "unknown_solar_capability"}:
+        reasons.add(SelectionReason.SOLAR_CAPABILITY_MISSELECTED)
+        reasons.add(SelectionReason.TOOL_VALIDATION_FAILED)
     return reasons
 
 
@@ -283,11 +293,19 @@ def _fallback_reasons(response: GeoAgentResponse) -> set[SelectionReason]:
     return reasons
 
 
-def _task_type(user_query: str, response: GeoAgentResponse) -> TaskType:
+def _task_type(
+    user_query: str,
+    response: GeoAgentResponse,
+    tool_sequence: tuple[str, ...],
+) -> TaskType:
     if response.analysis is not None and response.analysis.plan.analysis_type == "comparison":
         return TaskType.COMPARISON
     if is_multi_target_landmark_comparison(user_query):
         return TaskType.COMPARISON
+    if response.solar_decision is not None or ANALYZE_SOLAR_SITE_TOOL in tool_sequence:
+        return TaskType.SOLAR_DECISION
+    if is_solar_decision_request(user_query) and not is_solar_knowledge_request(user_query):
+        return TaskType.SOLAR_DECISION
     if response.overpass_query or response.geojson is not None:
         return TaskType.SPATIAL_SEARCH
     if response.passages:
@@ -296,12 +314,48 @@ def _task_type(user_query: str, response: GeoAgentResponse) -> TaskType:
 
 
 def _scope_kind(response: GeoAgentResponse) -> str:
+    report = response.solar_decision
+    if report is not None:
+        if report.site_selection_scope:
+            return report.site_selection_scope
+        if report.mode:
+            return report.mode
     summary = (response.scope_summary or "").lower()
     if "around" in summary or "m of" in summary or "comparison targets" in summary:
         return "radius"
     if summary:
         return "place"
     return "none"
+
+
+def _solar_reasons(
+    user_query: str,
+    response: GeoAgentResponse,
+    tool_sequence: tuple[str, ...],
+    model_codes: list[str],
+) -> set[SelectionReason]:
+    """Collect SolarDSS routing/question/capability mistakes. Never physics."""
+    reasons: set[SelectionReason] = set()
+    report = response.solar_decision
+    used_analyze = ANALYZE_SOLAR_SITE_TOOL in tool_sequence
+    decision_request = is_solar_decision_request(user_query)
+    knowledge_request = is_solar_knowledge_request(user_query)
+    if decision_request and not knowledge_request and not used_analyze and report is None:
+        reasons.add(SelectionReason.SOLAR_INTENT_MISROUTED)
+        reasons.add(SelectionReason.WRONG_OR_INELIGIBLE_TOOL)
+    if any(
+        code in {"solar_unknown_capability", "unknown_solar_capability"} for code in model_codes
+    ):
+        reasons.add(SelectionReason.SOLAR_CAPABILITY_MISSELECTED)
+    if report is not None and report.status == "routed" and not report.capability_id:
+        reasons.add(SelectionReason.SOLAR_CAPABILITY_MISSELECTED)
+    if report is not None:
+        asked = [item.field for item in report.questions]
+        missing = [item.field for item in report.missing_requirements]
+        if asked_provider_filled_fields((*asked, *missing)):
+            reasons.add(SelectionReason.SOLAR_QUESTION_SELECTION_ISSUE)
+            reasons.add(SelectionReason.GUARDRAIL_TRIGGERED)
+    return reasons
 
 
 def extract_run_signals(user_query: str, response: GeoAgentResponse) -> RunSignals:
@@ -328,6 +382,7 @@ def extract_run_signals(user_query: str, response: GeoAgentResponse) -> RunSigna
     metric_selection, metric_reasons = _metric_summary(response)
     reasons.update(metric_reasons)
     reasons.update(_fallback_reasons(response))
+    reasons.update(_solar_reasons(user_query, response, sequence, model_codes))
 
     rag_evidence = RagEvidenceSummary(
         passage_count=len(response.passages),
@@ -335,7 +390,12 @@ def extract_run_signals(user_query: str, response: GeoAgentResponse) -> RunSigna
         document_titles=[passage.document_title for passage in response.passages][:16],
     )
 
-    successful = (
+    report = response.solar_decision
+    task_type = _task_type(user_query, response, sequence)
+    solar_success = (
+        report is not None and response.stop_reason == "final_answer" and not model_codes
+    )
+    osm_success = (
         response.stop_reason == "final_answer"
         and not model_codes
         and not response.live_query_failed
@@ -344,17 +404,22 @@ def extract_run_signals(user_query: str, response: GeoAgentResponse) -> RunSigna
             or (response.analysis is not None and response.analysis.status == "completed")
         )
     )
+    successful = solar_success if task_type is TaskType.SOLAR_DECISION else osm_success
     if successful and not reasons:
         reasons.add(SelectionReason.SUCCESSFUL_HIGH_VALUE_TRACE)
 
     feature_concept = None
-    if response.analysis is not None:
+    if report is not None and report.capability_id:
+        feature_concept = report.capability_id
+    elif response.analysis is not None:
         feature_concept = response.analysis.plan.feature_concept
     elif response.validated_tags:
         feature_concept = response.validated_tags[0]
+    elif report is not None:
+        feature_concept = "solar"
 
     return RunSignals(
-        task_type=_task_type(user_query, response),
+        task_type=task_type,
         reasons=frozenset(reasons),
         tool_sequence=sequence,
         tool_validation_events=validations,
@@ -367,4 +432,7 @@ def extract_run_signals(user_query: str, response: GeoAgentResponse) -> RunSigna
         outcome_successful=successful,
         feature_concept=feature_concept,
         scope_kind=_scope_kind(response),
+        solar_capability=None if report is None else report.capability_id,
+        solar_status=None if report is None else report.status,
+        solar_question_fields=tuple(item.field for item in report.questions) if report else (),
     )

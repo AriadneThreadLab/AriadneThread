@@ -13,6 +13,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.agent.energy_intent import is_energy_grid_request
+from app.agent.solar_intent import is_solar_request
 
 _COMPARE_HINT = re.compile(
     r"\b("
@@ -162,7 +163,7 @@ def is_multi_target_landmark_comparison(message: str) -> bool:
 
 def is_indicator_analysis_request(message: str) -> bool:
     """Whether the comparison/indicator executor should handle this question."""
-    if is_energy_grid_request(message):
+    if is_energy_grid_request(message) or is_solar_request(message):
         return False
     if is_multi_target_landmark_comparison(message):
         return True

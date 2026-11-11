@@ -30,6 +30,7 @@ from app.agent.comparison_workflow import (
     tags_for_feature_concept,
 )
 from app.agent.contracts import GeoAgentResponse, ListTraceRecorder, StopReason, describe_payload
+from app.agent.evidence import partition_evidence
 from app.agent.indicator_execution import execute_selected_indicator
 from app.agent.planning_diagnostics import diagnostics_log_fields, measure_planning_messages
 from app.analytics.catalog import METRIC_CATALOG
@@ -1214,6 +1215,19 @@ class MultiTargetComparisonRunner:
             live_query_failed=state.live_query_failed,
             live_error_code=state.live_error_code,
             analysis=state.analysis,
+            energy_analysis=state.energy_analysis,
+            solar_decision=state.solar_decision,
+            solar_results=state.solar_results,
+            charts=list(state.charts),
+            analysis_result=state.analysis_result,
+            agent_questions=list(state.agent_questions),
+            evidence=partition_evidence(
+                passages=state.passages,
+                solar_decision=state.solar_decision,
+                analysis=state.analysis,
+                energy_analysis=state.energy_analysis,
+                solar_results=state.solar_results,
+            ),
             conversation_id=conversation_id,
             execution_memory=memory_trace,
         )

@@ -125,6 +125,7 @@ export function labelForTraceEvent(event, tool) {
       if (tool === "analyze_features") return "Requested spatial analytics";
       if (tool === "simbench_query") return "Requested SimBench network data";
       if (tool === "analyze_energy_grid") return "Requested GeoLoadST analysis";
+      if (tool === "analyze_solar_site") return "Requested solar decision routing";
       return tool ? `Requested tool: ${tool}` : "Tool call";
     case "tool_result":
       if (tool === "search_osm_knowledge") return "Received OSM documentation";
@@ -132,6 +133,7 @@ export function labelForTraceEvent(event, tool) {
       if (tool === "analyze_features") return "Computed spatial analytics";
       if (tool === "simbench_query") return "Loaded SimBench network data";
       if (tool === "analyze_energy_grid") return "Computed GeoLoadST analysis";
+      if (tool === "analyze_solar_site") return "Routed solar decision slots";
       return tool ? `Tool result: ${tool}` : "Tool result";
     case "tool_error":
       if (tool === "query_osm") return "Live OpenStreetMap query failed";
